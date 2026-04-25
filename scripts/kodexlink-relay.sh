@@ -35,9 +35,9 @@ Commands:
   desktop-service-remove      Remove the macOS LaunchAgent.
   desktop-status              Show KodexLink desktop agent status.
   tailscale-serve             Publish privately to your tailnet over HTTPS.
-  tailscale-serve-off         Disable the matching Tailscale Serve mapping.
+  tailscale-serve-off         Disable the Tailscale Serve HTTPS 443 proxy.
   tailscale-funnel            Publish publicly with Tailscale Funnel.
-  tailscale-funnel-off        Disable the matching Tailscale Funnel mapping.
+  tailscale-funnel-off        Disable the Tailscale Funnel HTTPS 443 proxy.
 EOF
 }
 
@@ -60,20 +60,83 @@ random_hex() {
     return
   fi
 
-  LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c 48
+  require_command od
+  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
   printf '\n'
 }
 
 ensure_env() {
   [[ -f "${ENV_FILE}" ]] || fail "missing ${ENV_FILE}; run: ./scripts/kodexlink-relay.sh init-env https://your-relay.example.com"
+  [[ -r "${ENV_FILE}" ]] || fail "cannot read ${ENV_FILE}"
 }
 
 load_env() {
   ensure_env
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
+  load_env_key COMPOSE_PROJECT_NAME
+  load_env_key KODEXLINK_TOOLS_DIR
+  load_env_key KODEXLINK_RELAY_REPO
+  load_env_key KODEXLINK_RELAY_PUBLIC_BASE_URL
+  load_env_key KODEXLINK_RELAY_HOST_PORT
+  load_env_key KODEXLINK_POSTGRES_DB
+  load_env_key KODEXLINK_POSTGRES_USER
+  load_env_key KODEXLINK_POSTGRES_PASSWORD
+}
+
+env_value() {
+  local key="$1"
+  local line
+  local value
+
+  ensure_env
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      ''|'#'*)
+        continue
+        ;;
+      "${key}="*)
+        value="${line#*=}"
+        if [[ "${#value}" -ge 2 ]]; then
+          local first_char="${value:0:1}"
+          local last_char="${value: -1}"
+          if { [[ "${first_char}" == "'" && "${last_char}" == "'" ]] || [[ "${first_char}" == '"' && "${last_char}" == '"' ]]; }; then
+            value="${value:1:${#value}-2}"
+          fi
+        fi
+        printf '%s\n' "${value}"
+        return 0
+        ;;
+      *)
+        ;;
+    esac
+  done < "${ENV_FILE}"
+
+  return 1
+}
+
+load_env_key() {
+  local key="$1"
+  local value
+  local rc
+
+  set +e
+  value="$(env_value "${key}")"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 ]]; then
+    printf -v "${key}" '%s' "${value}"
+    export "${key?}"
+  else
+    unset "${key?}"
+  fi
+}
+
+write_env_assignment() {
+  local key="$1"
+  local value="$2"
+
+  [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] || fail "${key} cannot contain newlines"
+  printf '%s=%s\n' "${key}" "${value}"
 }
 
 compose() {
@@ -98,16 +161,16 @@ init_env() {
 
   mkdir -p "${CONFIG_DIR}"
   umask 077
-  cat > "${ENV_FILE}" <<EOF
-COMPOSE_PROJECT_NAME=kodexlink-relay
-KODEXLINK_TOOLS_DIR=${ROOT_DIR}
-KODEXLINK_RELAY_REPO=${DEFAULT_RELAY_REPO}
-KODEXLINK_RELAY_PUBLIC_BASE_URL=${public_url}
-KODEXLINK_RELAY_HOST_PORT=8787
-KODEXLINK_POSTGRES_DB=codex_mobile
-KODEXLINK_POSTGRES_USER=kodexlink
-KODEXLINK_POSTGRES_PASSWORD=${postgres_password}
-EOF
+  {
+    write_env_assignment COMPOSE_PROJECT_NAME kodexlink-relay
+    write_env_assignment KODEXLINK_TOOLS_DIR "${ROOT_DIR}"
+    write_env_assignment KODEXLINK_RELAY_REPO "${DEFAULT_RELAY_REPO}"
+    write_env_assignment KODEXLINK_RELAY_PUBLIC_BASE_URL "${public_url}"
+    write_env_assignment KODEXLINK_RELAY_HOST_PORT 8787
+    write_env_assignment KODEXLINK_POSTGRES_DB codex_mobile
+    write_env_assignment KODEXLINK_POSTGRES_USER kodexlink
+    write_env_assignment KODEXLINK_POSTGRES_PASSWORD "${postgres_password}"
+  } > "${ENV_FILE}"
 
   info "created ${ENV_FILE}"
   info "public relay URL: ${public_url}"
@@ -131,7 +194,7 @@ set_public_url() {
   while IFS= read -r line || [[ -n "${line}" ]]; do
     case "${line}" in
       KODEXLINK_RELAY_PUBLIC_BASE_URL=*)
-        printf 'KODEXLINK_RELAY_PUBLIC_BASE_URL=%s\n' "${public_url}"
+        write_env_assignment KODEXLINK_RELAY_PUBLIC_BASE_URL "${public_url}"
         found=1
         ;;
       *)
@@ -141,7 +204,7 @@ set_public_url() {
   done < "${ENV_FILE}" > "${tmp_file}"
 
   if [[ "${found}" -eq 0 ]]; then
-    printf 'KODEXLINK_RELAY_PUBLIC_BASE_URL=%s\n' "${public_url}" >> "${tmp_file}"
+    write_env_assignment KODEXLINK_RELAY_PUBLIC_BASE_URL "${public_url}" >> "${tmp_file}"
   fi
 
   mv "${tmp_file}" "${ENV_FILE}"
@@ -169,7 +232,7 @@ set_relay_repo() {
   while IFS= read -r line || [[ -n "${line}" ]]; do
     case "${line}" in
       KODEXLINK_RELAY_REPO=*)
-        printf 'KODEXLINK_RELAY_REPO=%s\n' "${relay_repo}"
+        write_env_assignment KODEXLINK_RELAY_REPO "${relay_repo}"
         found=1
         ;;
       *)
@@ -179,7 +242,7 @@ set_relay_repo() {
   done < "${ENV_FILE}" > "${tmp_file}"
 
   if [[ "${found}" -eq 0 ]]; then
-    printf 'KODEXLINK_RELAY_REPO=%s\n' "${relay_repo}" >> "${tmp_file}"
+    write_env_assignment KODEXLINK_RELAY_REPO "${relay_repo}" >> "${tmp_file}"
   fi
 
   mv "${tmp_file}" "${ENV_FILE}"
@@ -225,7 +288,6 @@ desktop_command() {
 
 require_tailscale() {
   require_command tailscale
-  load_env
 }
 
 tailscale_target() {
@@ -234,6 +296,7 @@ tailscale_target() {
 
 tailscale_serve() {
   require_tailscale
+  load_env
   local target
   target="$(tailscale_target)"
   tailscale serve --bg --https=443 "${target}"
@@ -242,14 +305,13 @@ tailscale_serve() {
 
 tailscale_serve_off() {
   require_tailscale
-  local target
-  target="$(tailscale_target)"
-  tailscale serve --https=443 "${target}" off
+  tailscale serve --https=443 off
   tailscale serve status
 }
 
 tailscale_funnel() {
   require_tailscale
+  load_env
   local target
   target="$(tailscale_target)"
   tailscale funnel --bg --https=443 "${target}"
@@ -258,9 +320,13 @@ tailscale_funnel() {
 
 tailscale_funnel_off() {
   require_tailscale
-  local target
-  target="$(tailscale_target)"
-  tailscale funnel --https=443 "${target}" off
+  if ! tailscale status --json | grep -Eq '"funnel"|"https://tailscale.com/cap/funnel"'; then
+    info "Tailscale Funnel is not enabled for this node; leaving Tailscale Serve unchanged."
+    tailscale serve status
+    return 0
+  fi
+
+  tailscale funnel --https=443 off
   tailscale funnel status
 }
 

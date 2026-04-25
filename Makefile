@@ -16,7 +16,7 @@ PUBLIC_URL ?=
 RELAY_UPSTREAM_URL ?= https://github.com/David699/codex-mobile-relay.git
 RELAY_SOURCE_DIR ?= $(HOME)/.local/share/kodexlink-tools/codex-mobile-relay
 
-MARKDOWN_FILES := README.md CHANGELOG.md LICENSE.md docs/*.md
+MARKDOWN_FILES := README.md TODO.md CHANGELOG.md LICENSE.md docs/*.md
 SHELL_FILES := scripts/kodexlink-relay.sh scripts/tailscale-cli-launcher
 
 .DEFAULT_GOAL := help
@@ -168,13 +168,13 @@ install-tailscale-cli: ## Install or refresh /usr/local/bin/tailscale
 tailscale-serve: ensure-env require-tailscale ## Publish the relay privately with Tailscale Serve
 	@./scripts/kodexlink-relay.sh tailscale-serve
 
-tailscale-serve-off: require-tailscale ## Disable the Tailscale Serve mapping
+tailscale-serve-off: require-tailscale ## Disable the Tailscale Serve HTTPS 443 proxy
 	@./scripts/kodexlink-relay.sh tailscale-serve-off
 
 tailscale-funnel: ensure-env require-tailscale ## Publish the relay publicly with Tailscale Funnel
 	@./scripts/kodexlink-relay.sh tailscale-funnel
 
-tailscale-funnel-off: require-tailscale ## Disable the Tailscale Funnel mapping
+tailscale-funnel-off: require-tailscale ## Disable the Tailscale Funnel HTTPS 443 public proxy
 	@./scripts/kodexlink-relay.sh tailscale-funnel-off
 
 pair: ensure-env require-kodexlink ## Open the local QR pairing panel
@@ -223,12 +223,12 @@ doctor-tailscale: require-tailscale ## Check Tailscale CLI and Serve mapping
 	@echo "Tailscale CLI and Serve status are available."
 
 doctor-mobile: ensure-env ## Check mobile-facing relay URL basics
-	@set -a; source "$(ENV_FILE)"; set +a; \
-	case "$${KODEXLINK_RELAY_PUBLIC_BASE_URL:-}" in \
+	@public_url="$$(KODEXLINK_RELAY_ENV_FILE="$(ENV_FILE)" ./scripts/kodexlink-relay.sh public-url)"; \
+	case "$${public_url:-}" in \
 		https://*) echo "Mobile relay URL is configured as HTTPS."; ;; \
 		*) echo "Mobile relay URL should be an HTTPS Tailscale Serve URL before pairing."; exit 1; ;; \
 	esac; \
-	curl -fsS "$${KODEXLINK_RELAY_PUBLIC_BASE_URL%/}/healthz" >/dev/null; \
+	curl -fsS "$${public_url%/}/healthz" >/dev/null || exit 1; \
 	echo "Mobile-facing relay health endpoint is reachable."
 
 privacy-check: ## Scan repository files for common generated secrets
