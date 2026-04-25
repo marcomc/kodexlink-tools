@@ -1,6 +1,6 @@
 # License
 
-Copyright (c) 2026 Marco Maso Calderone.
+Copyright (c) 2026 Marco Massari Calderone <marco@marcomc.com>
 
 This repository contains local setup and operations tooling for running a
 private KodexLink mobile relay. Unless a file states otherwise, this repository
