@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KODEXLINK_POSTGRES_DB:-codex_mobile}
+      POSTGRES_USER: ${KODEXLINK_POSTGRES_USER:-kodexlink}
+      POSTGRES_PASSWORD: ${KODEXLINK_POSTGRES_PASSWORD:?set KODEXLINK_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  relay:
+    build:
+      context: ${KODEXLINK_RELAY_REPO:?set KODEXLINK_RELAY_REPO in the relay env file}
+      dockerfile: ${KODEXLINK_TOOLS_DIR:?set KODEXLINK_TOOLS_DIR in the relay env file}/docker/relay-server.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "8787"
+      RELAY_BIND_HOST: 0.0.0.0
+      RELAY_PUBLIC_BASE_URL: ${KODEXLINK_RELAY_PUBLIC_BASE_URL:?set KODEXLINK_RELAY_PUBLIC_BASE_URL in .env}
+      DATABASE_URL: postgres://${KODEXLINK_POSTGRES_USER:-kodexlink}:${KODEXLINK_POSTGRES_PASSWORD}@postgres:5432/${KODEXLINK_POSTGRES_DB:-codex_mobile}
+      REDIS_URL: redis://redis:6379
+      RELAY_ENABLE_DEV_RESET: "0"
+    ports:
+      - 127.0.0.1:${KODEXLINK_RELAY_HOST_PORT:-8787}:8787
+    command:
+      - sh
+      - -c
+      - node runtime-apps/relay-server/dist/server.js migrate && exec node runtime-apps/relay-server/dist/server.js serve
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:8787/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  redis-data:
