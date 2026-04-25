@@ -251,6 +251,7 @@ install-tailscale-cli: ## Install or refresh /usr/local/bin/tailscale
 				"$(TAILSCALE)" version; \
 			else \
 				echo "Install Tailscale for Linux first: https://tailscale.com/download/linux"; \
+				exit 1; \
 			fi; \
 			;; \
 		*) \

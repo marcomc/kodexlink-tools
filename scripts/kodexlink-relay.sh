@@ -367,6 +367,26 @@ native_prepare_env() {
   load_env
 }
 
+native_validate_env() {
+  load_env
+  [[ "${KODEXLINK_RELAY_RUNTIME:-native}" == "native" ]] || fail "KODEXLINK_RELAY_RUNTIME must be native for native relay checks"
+  [[ -n "${KODEXLINK_RELAY_REPO:-}" ]] || fail "KODEXLINK_RELAY_REPO is missing from ${ENV_FILE}"
+  [[ -d "${KODEXLINK_RELAY_REPO}" ]] || fail "relay source directory does not exist: ${KODEXLINK_RELAY_REPO}"
+  [[ -f "${KODEXLINK_RELAY_REPO}/package.json" ]] || fail "relay source directory does not look like the upstream repository: ${KODEXLINK_RELAY_REPO}"
+  [[ -n "${KODEXLINK_RELAY_PUBLIC_BASE_URL:-}" ]] || fail "KODEXLINK_RELAY_PUBLIC_BASE_URL is missing from ${ENV_FILE}"
+  [[ "${RELAY_BIND_HOST:-127.0.0.1}" == "127.0.0.1" ]] || fail "native relay must bind to 127.0.0.1"
+  [[ "${RELAY_ENABLE_DEV_RESET:-0}" == "0" ]] || fail "RELAY_ENABLE_DEV_RESET must be disabled for native service checks"
+
+  local deps_mode
+  deps_mode="$(native_deps_mode)"
+  if [[ "${deps_mode}" == "managed" ]]; then
+    [[ -n "${KODEXLINK_POSTGRES_PASSWORD:-}" ]] || fail "KODEXLINK_POSTGRES_PASSWORD is required when KODEXLINK_NATIVE_DEPS=managed"
+  else
+    [[ -n "${DATABASE_URL:-}" ]] || fail "DATABASE_URL is required when KODEXLINK_NATIVE_DEPS=external"
+    [[ -n "${REDIS_URL:-}" ]] || fail "REDIS_URL is required when KODEXLINK_NATIVE_DEPS=external"
+  fi
+}
+
 native_install_deps_macos() {
   require_command brew
 
@@ -469,20 +489,20 @@ native_configure_postgres() {
 
   local db_name="${KODEXLINK_POSTGRES_DB:-codex_mobile}"
   local db_user="${KODEXLINK_POSTGRES_USER:-kodexlink}"
-  local db_password="${KODEXLINK_POSTGRES_PASSWORD:?}"
+  local db_pass="${KODEXLINK_POSTGRES_PASSWORD:?}"
   [[ "${db_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "invalid PostgreSQL database name: ${db_name}"
   [[ "${db_user}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "invalid PostgreSQL user name: ${db_user}"
 
-  local escaped_password
-  escaped_password="${db_password//\'/\'\'}"
+  local escaped_pass
+  escaped_pass="${db_pass//\'/\'\'}"
 
   postgres_admin_command <<SQL
 DO \$\$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${db_user}') THEN
-    CREATE ROLE ${db_user} LOGIN PASSWORD '${escaped_password}';
+    CREATE ROLE ${db_user} LOGIN PASSWORD '${escaped_pass}';
   ELSE
-    ALTER ROLE ${db_user} WITH LOGIN PASSWORD '${escaped_password}';
+    ALTER ROLE ${db_user} WITH LOGIN PASSWORD '${escaped_pass}';
   END IF;
 END
 \$\$;
@@ -517,14 +537,55 @@ write_native_runner() {
   native_prepare_env
   mkdir -p "${CONFIG_DIR}"
   umask 077
+  local env_file_literal
+  env_file_literal="$(printf '%q' "${ENV_FILE}")"
   cat > "${NATIVE_RUNNER}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\${PATH:-}"
-set -a
-. "${ENV_FILE}"
-set +a
+
+load_env_file() {
+  local env_file="\$1"
+  local line
+  local key
+  local value
+  local first_char
+  local last_char
+
+  while IFS= read -r line || [[ -n "\${line}" ]]; do
+    case "\${line}" in
+      ''|'#'*)
+        continue
+        ;;
+      *=*)
+        key="\${line%%=*}"
+        value="\${line#*=}"
+        ;;
+      *)
+        continue
+        ;;
+    esac
+
+    [[ "\${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+      printf 'Invalid environment key in %s: %s\n' "\${env_file}" "\${key}" >&2
+      exit 1
+    }
+
+    if [[ "\${#value}" -ge 2 ]]; then
+      first_char="\${value:0:1}"
+      last_char="\${value: -1}"
+      if { [[ "\${first_char}" == "'" && "\${last_char}" == "'" ]] || [[ "\${first_char}" == '"' && "\${last_char}" == '"' ]]; }; then
+        value="\${value:1:\${#value}-2}"
+      fi
+    fi
+
+    printf -v "\${key}" '%s' "\${value}"
+    export "\${key?}"
+  done < "\${env_file}"
+}
+
+load_env_file ${env_file_literal}
 
 cd "\${KODEXLINK_RELAY_REPO:?}"
 node runtime-apps/relay-server/dist/server.js migrate
@@ -541,6 +602,15 @@ xml_escape() {
   value="${value//\"/&quot;}"
   value="${value//\'/&apos;}"
   printf '%s\n' "${value}"
+}
+
+systemd_quote() {
+  local value="$1"
+  [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] || fail "systemd value cannot contain newlines"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '"%s"\n' "${value}"
 }
 
 native_write_launch_agent() {
@@ -589,6 +659,11 @@ native_write_systemd_user_unit() {
   write_native_runner
   mkdir -p "${NATIVE_SYSTEMD_USER_DIR}"
 
+  local runner
+  local working_dir
+  runner="$(systemd_quote "${NATIVE_RUNNER}")"
+  working_dir="$(systemd_quote "${KODEXLINK_RELAY_REPO}")"
+
   cat > "${NATIVE_SYSTEMD_UNIT}" <<EOF
 [Unit]
 Description=KodexLink Native Relay
@@ -597,8 +672,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${KODEXLINK_RELAY_REPO}
-ExecStart=/bin/bash ${NATIVE_RUNNER}
+WorkingDirectory=${working_dir}
+ExecStart=/bin/bash ${runner}
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
@@ -762,7 +837,7 @@ native_service_logs() {
 }
 
 native_config_check() {
-  native_prepare_env
+  native_validate_env
   [[ -x "${NATIVE_RUNNER}" ]] || fail "missing native runner; run: make install RELAY_RUNTIME=native"
   local os
   os="$(native_os)"
@@ -773,7 +848,9 @@ native_config_check() {
       ;;
     linux)
       [[ -f "${NATIVE_SYSTEMD_UNIT}" ]] || fail "missing systemd user unit; run: make install RELAY_RUNTIME=native"
-      systemctl --user daemon-reload
+      if command -v systemd-analyze >/dev/null 2>&1; then
+        systemd-analyze verify "${NATIVE_SYSTEMD_UNIT}" >/dev/null
+      fi
       ;;
     *)
       fail "unsupported native relay OS: ${os}"
