@@ -9,6 +9,7 @@ updates, reboot behavior, and recovery notes for KodexLink Relay Tools.
 - [Makefile Workflow](#makefile-workflow)
 - [Repository Clone Lifecycle](#repository-clone-lifecycle)
 - [Install And Enable](#install-and-enable)
+- [Native Runtime](#native-runtime)
 - [Update Without Re-Pairing](#update-without-re-pairing)
 - [Pairing And Recovery](#pairing-and-recovery)
 - [Remote Pairing](#remote-pairing)
@@ -22,10 +23,12 @@ updates, reboot behavior, and recovery notes for KodexLink Relay Tools.
 
 The setup has three runtime parts:
 
-- Docker Compose runs the relay, PostgreSQL, and Redis.
+- Docker Compose runs the relay, PostgreSQL, and Redis by default.
+- The optional native runtime runs the relay directly on the host and connects
+  to existing PostgreSQL and Redis services by default.
 - Tailscale Serve publishes the local relay privately over HTTPS to the tailnet.
-- The KodexLink desktop agent runs as a macOS LaunchAgent and connects Codex to
-  the relay.
+- The KodexLink desktop agent runs as the upstream host service and connects
+  Codex to the relay.
 
 The relay stack stores durable mobile bindings in PostgreSQL. Redis stores
 short-lived pairing sessions and idempotency state. The desktop agent is
@@ -50,6 +53,19 @@ make status
 make measure
 make update
 make disable
+```
+
+Docker is the default runtime. To install or manage the native host service,
+pass `RELAY_RUNTIME=native`. Native mode defaults to externally managed
+PostgreSQL and Redis:
+
+```bash
+make install RELAY_RUNTIME=native \
+  DATABASE_URL=postgres://user:password@127.0.0.1:5432/codex_mobile \
+  REDIS_URL=redis://127.0.0.1:6379 \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native
+make status RELAY_RUNTIME=native
 ```
 
 The private runtime environment file is created outside the repository:
@@ -81,9 +97,11 @@ repository clone:
 - the managed upstream relay source checkout lives under
   `~/.local/share/kodexlink-tools/` by default;
 - the private relay environment lives under `~/.config/kodexlink-tools/`;
-- the relay database and Redis data live in Docker volumes;
+- with Docker, the relay database and Redis data live in Docker volumes;
+- with the native runtime, PostgreSQL and Redis data stay wherever the provided
+  connection URLs point;
 - the KodexLink desktop CLI is installed by npm;
-- the desktop agent LaunchAgent is installed by the upstream KodexLink CLI;
+- the desktop agent service is installed by the upstream KodexLink CLI;
 - the Tailscale Serve mapping is stored by Tailscale.
 
 If the `kodexlink-tools` clone is deleted while the relay containers are already
@@ -98,6 +116,10 @@ the clone, the user loses the supported commands for `make enable`,
 If the relay containers are removed, the Docker image must be rebuilt, or the
 environment needs to be changed, clone this repository again before managing the
 setup.
+
+For native installs, keep the clone because the generated launchd/systemd
+service points to the managed upstream checkout and this helper remains the
+supported update and diagnostics entrypoint.
 
 ## Install And Enable
 
@@ -121,10 +143,10 @@ make pair
 
 `make enable` starts the runtime services. It:
 
-- starts Docker Desktop if needed;
-- starts the Docker relay stack;
+- starts Docker Desktop and the Docker relay stack by default;
+- or starts the native relay service when `RELAY_RUNTIME=native`;
 - configures Tailscale Serve;
-- installs or refreshes the KodexLink desktop LaunchAgent.
+- installs or refreshes the KodexLink desktop service.
 
 `make disable` stops runtime services without deleting relay data:
 
@@ -132,8 +154,9 @@ make pair
 make disable
 ```
 
-It stops the desktop LaunchAgent, disables the Tailscale Serve mapping, and
-stops the Docker Compose stack. PostgreSQL data remains in the Docker volume.
+It stops the desktop service, disables the Tailscale Serve mapping, and stops
+the selected relay runtime. It does not delete Docker volumes or external
+database data.
 
 If only the relay URL changed:
 
@@ -146,6 +169,79 @@ make pair
 `make restart` reapplies the Docker Compose configuration so environment changes
 are loaded into the running relay container.
 
+## Native Runtime
+
+Use native mode when Docker should not supervise the relay:
+
+```bash
+make install RELAY_RUNTIME=native \
+  DATABASE_URL=postgres://user:password@127.0.0.1:5432/codex_mobile \
+  REDIS_URL=redis://127.0.0.1:6379 \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native
+```
+
+By default, native mode uses `NATIVE_DEPS=external`. It does not install or
+configure PostgreSQL or Redis. It only writes the relay service and uses the
+`DATABASE_URL` and `REDIS_URL` values supplied by the user or already present
+in `~/.config/kodexlink-tools/relay.env`.
+
+Use managed dependencies only when local database services should be installed
+and configured by this helper:
+
+```bash
+make install RELAY_RUNTIME=native NATIVE_DEPS=managed \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+```
+
+With `NATIVE_DEPS=managed`, the installer detects the host with `uname`:
+
+- macOS: installs dependencies with Homebrew, starts Homebrew PostgreSQL and
+  Redis services, builds the relay, and writes
+  `~/Library/LaunchAgents/com.kodexlink.relay.plist`.
+- Linux: follows the upstream Ubuntu deployment shape without Nginx. It expects
+  systemd, installs PostgreSQL and Redis with `apt-get` when available, builds
+  the relay with an existing Node/pnpm toolchain, writes
+  `~/.config/systemd/user/kodexlink-relay.service`, and attempts
+  `loginctl enable-linger` so the user service can survive logout.
+
+The native service runs this sequence from the upstream relay checkout:
+
+```bash
+node runtime-apps/relay-server/dist/server.js migrate
+node runtime-apps/relay-server/dist/server.js serve
+```
+
+The generated `relay.env` receives the native runtime variables used by the
+upstream relay:
+
+```dotenv
+NODE_ENV=production
+PORT=8787
+RELAY_BIND_HOST=127.0.0.1
+RELAY_PUBLIC_BASE_URL=https://machine-name.tailnet-name.ts.net
+DATABASE_URL=<existing-postgres-url>
+REDIS_URL=<existing-redis-url>
+RELAY_ENABLE_DEV_RESET=0
+```
+
+Tailscale Serve is unchanged:
+
+```text
+https://machine-name.tailnet-name.ts.net -> http://127.0.0.1:8787
+```
+
+Native management commands use the same public targets:
+
+```bash
+make start RELAY_RUNTIME=native
+make stop RELAY_RUNTIME=native
+make restart RELAY_RUNTIME=native
+make status RELAY_RUNTIME=native
+make logs RELAY_RUNTIME=native
+make measure RELAY_RUNTIME=native
+```
+
 ## Update Without Re-Pairing
 
 Use this when the upstream author publishes a new relay or desktop CLI version:
@@ -155,9 +251,9 @@ make update
 ```
 
 It updates the managed relay checkout, updates the KodexLink desktop CLI from
-npm, rebuilds and restarts the relay container, and refreshes the LaunchAgent.
-It does not delete Docker volumes, recreate `relay.env`, or change
-`KODEXLINK_RELAY_PUBLIC_BASE_URL`.
+npm, rebuilds and restarts the selected relay runtime, and refreshes the
+desktop service. It does not delete Docker volumes, native PostgreSQL data,
+recreate `relay.env`, or change `KODEXLINK_RELAY_PUBLIC_BASE_URL`.
 
 Existing paired devices should remain paired because their durable bindings live
 in PostgreSQL and the relay URL remains the same. A relay restart can invalidate
@@ -245,7 +341,7 @@ short, deliberate remote pairing window.
 
 ## Boot Behavior
 
-This project does not install a separate LaunchAgent to supervise Docker
+With Docker, this project does not install a separate LaunchAgent to supervise
 Compose. Docker is the supervisor for the relay containers.
 
 The Docker containers use `restart: unless-stopped`. The relay stack is
@@ -278,6 +374,10 @@ If it is not running:
 make install-tool
 ```
 
+With `RELAY_RUNTIME=native`, the relay itself is supervised by
+`com.kodexlink.relay` on macOS or `kodexlink-relay.service` under
+`systemctl --user` on Linux.
+
 ## Why Docker Stays Localhost
 
 The Compose file binds the relay to localhost on the Mac:
@@ -301,14 +401,16 @@ That avoids a separate reverse proxy and certificate renewal process.
 
 ## Why The Desktop Agent Stays On The Host
 
-The desktop agent should run directly on macOS, not inside Docker.
+The desktop agent should run directly on the host, not inside Docker.
 
 The agent launches `codex app-server`, uses the host user's Codex login, stores
-credentials in macOS Keychain when available, and installs a LaunchAgent. A
-containerized copy would be a separate Codex environment inside Docker, not the
-normal Codex CLI and local workspace on the Mac.
+credentials in the host credential store when available, and installs the
+upstream host service. A containerized copy would be a separate Codex
+environment inside Docker, not the normal Codex CLI and local workspace on the
+host.
 
-Use Docker only for the relay-side services.
+Use Docker only for the relay-side services, or use `RELAY_RUNTIME=native` to
+run those relay-side services directly on the host.
 
 ## Diagnostics
 

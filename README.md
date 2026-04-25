@@ -1,13 +1,16 @@
 # KodexLink Relay Tools
 
-Local tooling for running a private KodexLink mobile relay on macOS with Docker
-Compose, Tailscale Serve, and the upstream KodexLink desktop agent.
+Local tooling for running a private KodexLink mobile relay on macOS or Linux
+with Docker Compose or a native host service, Tailscale Serve, and the upstream
+KodexLink desktop agent.
 
 ## Table of Contents
 
 - [What It Does](#what-it-does)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
+- [Platform Install Guides](#platform-install-guides)
+- [Runtime Selection](#runtime-selection)
 - [Daily Commands](#daily-commands)
 - [Pairing](#pairing)
 - [Updates](#updates)
@@ -24,10 +27,13 @@ Compose, Tailscale Serve, and the upstream KodexLink desktop agent.
 This project gives one command surface for a private KodexLink relay setup:
 
 - clones or updates the upstream relay source;
-- builds and runs the relay, PostgreSQL, and Redis with Docker Compose;
-- keeps the relay bound to `127.0.0.1` on the Mac;
+- builds and runs the relay, PostgreSQL, and Redis with Docker Compose by
+  default;
+- can alternatively run the relay as a native host service against existing
+  PostgreSQL and Redis connection URLs;
+- keeps the relay bound to `127.0.0.1` on the host;
 - publishes the relay privately over HTTPS with Tailscale Serve;
-- installs the KodexLink desktop agent as a macOS LaunchAgent;
+- installs the KodexLink desktop agent as the upstream host service;
 - opens the local QR pairing panel when a phone or iPad needs pairing;
 - checks health, resources, diagnostics, and repository privacy.
 
@@ -50,9 +56,9 @@ hostnames, generated pairing payloads, or generated env files.
 ```text
 iPhone / iPad
   -> Tailscale HTTPS URL
-  -> Tailscale Serve on the Mac
+  -> Tailscale Serve on the host
   -> http://127.0.0.1:8787
-  -> Docker relay
+  -> Docker or native relay
   -> PostgreSQL + Redis
 
 KodexLink desktop agent
@@ -62,8 +68,8 @@ KodexLink desktop agent
 
 The relay itself is plain HTTP and does not load TLS certificates. Tailscale
 Serve terminates HTTPS for the `*.ts.net` address and proxies to the local
-relay port. That keeps Docker private to the Mac while giving iOS and iPadOS a
-trusted HTTPS endpoint.
+relay port. That keeps the raw relay private to the host while giving iOS and
+iPadOS a trusted HTTPS endpoint.
 
 `RELAY_PUBLIC_BASE_URL` is critical. The relay embeds it into pairing payloads,
 and the mobile app stores it when pairing succeeds. Set the final Tailscale
@@ -93,22 +99,307 @@ On iPhone or iPad, before scanning the QR code:
 7. Return to the pairing scanner and scan the Mac QR code.
 
 `make install` prepares the machine but does not start runtime services.
-`make enable` starts Docker, configures Tailscale Serve, and installs the
-desktop LaunchAgent.
+`make enable` starts the selected relay runtime, configures Tailscale Serve, and
+installs the desktop service.
+
+## Platform Install Guides
+
+Replace `https://machine-name.tailnet-name.ts.net` with the host machine's
+Tailscale HTTPS name.
+
+### macOS With Docker
+
+Prerequisites:
+
+- macOS with Docker Desktop installed.
+- Docker Desktop configured to start at login if the relay should recover after
+  reboot.
+- Tailscale installed, logged in, and MagicDNS plus HTTPS certificates enabled
+  in the Tailscale admin console.
+- Node.js/npm available for the upstream `kodexlink` CLI.
+- `git`, `make`, `curl`, `markdownlint`, and `shellcheck` available if the
+  user will run repository checks.
+
+Install and enable:
+
+```bash
+git clone https://github.com/<owner>/kodexlink-tools.git
+cd kodexlink-tools
+
+make check-deps
+make install PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable
+make doctor
+make pair
+```
+
+Expected behavior:
+
+- Docker Compose runs PostgreSQL, Redis, and the relay.
+- The relay listens only on `127.0.0.1:8787`.
+- Tailscale Serve maps
+  `https://machine-name.tailnet-name.ts.net` to `http://127.0.0.1:8787`.
+- Docker restarts the relay containers after Docker Desktop restarts, provided
+  they were not stopped with `make disable`, `make stop`, or
+  `docker compose down`.
+
+Useful checks:
+
+```bash
+make status
+make health
+tailscale serve status
+curl -fsS http://127.0.0.1:8787/healthz
+```
+
+### Ubuntu With Docker
+
+Prerequisites:
+
+- Ubuntu with Docker Engine and the Docker Compose plugin installed.
+- The user can run Docker commands, or is prepared to use the local Docker
+  permission model already configured on that host.
+- Tailscale installed and logged in.
+- MagicDNS and HTTPS certificates enabled in the Tailscale admin console.
+- Node.js/npm available for the upstream `kodexlink` CLI.
+- `git`, `make`, and `curl` installed.
+
+Example prerequisite install commands:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git make curl nodejs npm
+```
+
+Install Docker and Tailscale using their official Ubuntu instructions, then
+verify:
+
+```bash
+docker info
+docker compose version
+tailscale status
+```
+
+Install and enable:
+
+```bash
+git clone https://github.com/<owner>/kodexlink-tools.git
+cd kodexlink-tools
+
+make check-deps
+make install PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable
+make doctor
+make pair
+```
+
+Expected behavior:
+
+- Docker Compose runs PostgreSQL, Redis, and the relay with
+  `restart: unless-stopped`.
+- The relay binds to `127.0.0.1:8787` on the Ubuntu host.
+- Tailscale Serve publishes the relay over the machine's private HTTPS
+  `*.ts.net` URL.
+- After reboot, the relay comes back when the Docker service starts again,
+  provided the containers were not explicitly stopped.
+
+Useful checks:
+
+```bash
+make status
+make health
+tailscale serve status
+curl -fsS http://127.0.0.1:8787/healthz
+```
+
+### macOS Native With External Services
+
+Use this when PostgreSQL and Redis are already managed outside this installer,
+for example by Homebrew, another local service manager, or remote services.
+This mode does not install or configure PostgreSQL or Redis.
+
+Prerequisites:
+
+- macOS with Tailscale installed and logged in.
+- MagicDNS and HTTPS certificates enabled in the Tailscale admin console.
+- Node.js/npm and `pnpm` available.
+- PostgreSQL and Redis reachable from the Mac.
+- `DATABASE_URL` and `REDIS_URL` values for those existing services.
+
+Install and enable:
+
+```bash
+git clone https://github.com/<owner>/kodexlink-tools.git
+cd kodexlink-tools
+
+make install RELAY_RUNTIME=native \
+  DATABASE_URL=postgres://user:password@127.0.0.1:5432/codex_mobile \
+  REDIS_URL=redis://127.0.0.1:6379 \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native
+make doctor RELAY_RUNTIME=native
+make pair
+```
+
+Expected behavior:
+
+- launchd supervises the native relay with
+  `~/Library/LaunchAgents/com.kodexlink.relay.plist`.
+- The relay connects to the supplied PostgreSQL and Redis URLs.
+- Tailscale Serve publishes `http://127.0.0.1:8787` as the private HTTPS
+  `*.ts.net` URL.
+
+### macOS Native With Managed Local Services
+
+Use this only when this helper should install and start local PostgreSQL and
+Redis through Homebrew.
+
+Prerequisites:
+
+- macOS with Homebrew installed.
+- Tailscale installed and logged in.
+- MagicDNS and HTTPS certificates enabled in the Tailscale admin console.
+- Node.js/npm available for the upstream `kodexlink` CLI.
+
+Install and enable:
+
+```bash
+git clone https://github.com/<owner>/kodexlink-tools.git
+cd kodexlink-tools
+
+make install RELAY_RUNTIME=native NATIVE_DEPS=managed \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native NATIVE_DEPS=managed
+make doctor RELAY_RUNTIME=native NATIVE_DEPS=managed
+make pair
+```
+
+Expected behavior:
+
+- Homebrew installs and starts PostgreSQL and Redis if they are missing.
+- launchd supervises the native relay.
+- The relay binds to `127.0.0.1:8787` and uses local PostgreSQL and Redis.
+
+### Ubuntu Native With External Services
+
+Use this when PostgreSQL and Redis are already managed outside this installer,
+for example by system packages, another host, or managed database services.
+This mode does not install or configure PostgreSQL or Redis.
+
+Prerequisites:
+
+- Ubuntu with Tailscale installed and logged in.
+- MagicDNS and HTTPS certificates enabled in the Tailscale admin console.
+- Node.js/npm and `pnpm` available.
+- PostgreSQL and Redis reachable from the Ubuntu host.
+- `DATABASE_URL` and `REDIS_URL` values for those existing services.
+
+Install and enable:
+
+```bash
+git clone https://github.com/<owner>/kodexlink-tools.git
+cd kodexlink-tools
+
+make install RELAY_RUNTIME=native \
+  DATABASE_URL=postgres://user:password@127.0.0.1:5432/codex_mobile \
+  REDIS_URL=redis://127.0.0.1:6379 \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native
+make doctor RELAY_RUNTIME=native
+make pair
+```
+
+Expected behavior:
+
+- systemd supervises the user service at
+  `~/.config/systemd/user/kodexlink-relay.service`.
+- The relay connects to the supplied PostgreSQL and Redis URLs.
+- The installer attempts to enable user lingering with `loginctl` so the relay
+  can survive logout.
+
+### Ubuntu Native With Managed Local Services
+
+Use this only when this helper should install and start local PostgreSQL and
+Redis through `apt-get`.
+
+Prerequisites:
+
+- Ubuntu with Tailscale installed and logged in.
+- MagicDNS and HTTPS certificates enabled in the Tailscale admin console.
+- Node.js/npm and `pnpm` available.
+- `sudo` access for installing packages and enabling services.
+
+Install and enable:
+
+```bash
+git clone https://github.com/<owner>/kodexlink-tools.git
+cd kodexlink-tools
+
+make install RELAY_RUNTIME=native NATIVE_DEPS=managed \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native NATIVE_DEPS=managed
+make doctor RELAY_RUNTIME=native NATIVE_DEPS=managed
+make pair
+```
+
+Expected behavior:
+
+- `apt-get` installs PostgreSQL and Redis if they are missing.
+- systemd starts PostgreSQL, Redis, and the user-level relay service.
+- The relay binds to `127.0.0.1:8787` and uses local PostgreSQL and Redis.
+
+## Runtime Selection
+
+Docker remains the default runtime:
+
+```bash
+make install PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable
+```
+
+Use the native runtime explicitly when Docker is not wanted:
+
+```bash
+make install RELAY_RUNTIME=native \
+  DATABASE_URL=postgres://user:password@127.0.0.1:5432/codex_mobile \
+  REDIS_URL=redis://127.0.0.1:6379 \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native
+```
+
+The native runtime defaults to `NATIVE_DEPS=external`, so it does not install
+or configure PostgreSQL or Redis. Provide existing `DATABASE_URL` and
+`REDIS_URL` values, or store them in `~/.config/kodexlink-tools/relay.env`.
+
+Use `NATIVE_DEPS=managed` only when the installer should manage local
+PostgreSQL and Redis:
+
+```bash
+make install RELAY_RUNTIME=native NATIVE_DEPS=managed \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+```
+
+The native runtime detects macOS or Linux. It installs a LaunchAgent on macOS
+or a systemd user service on Linux, then runs the upstream relay migration and
+`node runtime-apps/relay-server/dist/server.js serve`. The relay still binds to
+`127.0.0.1:8787`; Tailscale Serve remains the HTTPS layer.
 
 ## Daily Commands
 
 ```bash
 make help              # show available targets
-make status            # relay containers and desktop agent status
+make status            # relay runtime and desktop agent status
 make health            # local relay health
 make doctor            # relay, Tailscale, mobile URL, privacy checks
-make measure           # one-shot Docker CPU and memory stats
+make measure           # one-shot relay CPU and memory stats
 make logs SERVICE=relay
-make restart           # rebuild/reapply relay compose config
+make restart           # restart selected relay runtime
 make disable           # stop services without deleting data
 make enable            # start services again
 ```
+
+Pass `RELAY_RUNTIME=native` to these commands to manage the native relay
+service instead of the Docker Compose stack.
 
 The lower-level script remains available for direct operations:
 
@@ -154,14 +445,14 @@ make update
 ```
 
 This updates the managed upstream checkout, updates the KodexLink desktop CLI
-from npm, rebuilds and restarts the relay container, and refreshes the
-LaunchAgent. It does not delete Docker volumes, recreate `relay.env`, or change
-the relay public URL, so already paired devices should remain paired. Any QR
-pairing session open during the restart can expire; run `make pair` again.
+from npm, rebuilds and restarts the selected relay runtime, and refreshes the
+desktop service. It does not recreate `relay.env` or change the relay public
+URL, so already paired devices should remain paired. Any QR pairing session
+open during the restart can expire; run `make pair` again.
 
 ## Boot Behavior
 
-This project does not install a separate LaunchAgent to supervise Docker
+With Docker, this project does not install a separate LaunchAgent to supervise
 Compose. Docker owns relay container restart behavior through
 `restart: unless-stopped`.
 
@@ -185,6 +476,10 @@ make start
 Tailscale Serve persists in Tailscale background mode. The desktop agent
 persists through the upstream KodexLink macOS LaunchAgent.
 
+With `RELAY_RUNTIME=native`, the relay is supervised by launchd on macOS or a
+systemd user service on Linux. On Linux the installer also attempts to enable
+user lingering so the relay can start before an interactive login.
+
 ## Security Model
 
 Recommended private path:
@@ -205,13 +500,13 @@ The relay has bearer tokens and short-lived pairing secrets, but no global admin
 password. Treat public exposure as an internet-facing API. Keep
 `RELAY_ENABLE_DEV_RESET` disabled outside local development.
 
-Run the desktop agent on the Mac host, not in Docker. It launches
-`codex app-server`, uses the host user's Codex login, stores credentials in
-macOS Keychain when available, and installs a macOS LaunchAgent.
+Run the desktop agent on the host, not in Docker. It launches
+`codex app-server`, uses the host user's Codex login, stores credentials in the
+host credential store when available, and installs the upstream host service.
 
 ## Resource Use
 
-Idle smoke tests on this Mac reported roughly:
+Idle measurements on this Mac reported roughly:
 
 - `relay`: 31-36 MiB memory;
 - `postgres`: 25-28 MiB memory;
@@ -234,7 +529,8 @@ PostgreSQL cache.
 ## Project Files
 
 - `Makefile`: primary command entrypoint.
-- `docker-compose.kodexlink-relay.yml`: relay, PostgreSQL, and Redis stack.
+- `docker-compose.kodexlink-relay.yml`: Docker relay, PostgreSQL, and Redis
+  stack.
 - `docker/relay-server.Dockerfile`: relay image build from upstream source.
 - `scripts/kodexlink-relay.sh`: lifecycle, publishing, and measurement helper.
 - `scripts/tailscale-cli-launcher`: `/usr/local/bin/tailscale` wrapper.

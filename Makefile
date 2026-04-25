@@ -13,22 +13,59 @@ COMPOSE_FILE ?= docker-compose.kodexlink-relay.yml
 MARKDOWNLINT_CONFIG ?= $(HOME)/.markdownlint.json
 DEFAULT_PUBLIC_URL ?= http://127.0.0.1:8787
 PUBLIC_URL ?=
+RELAY_RUNTIME ?= docker
+NATIVE_DEPS ?= external
+DATABASE_URL ?=
+REDIS_URL ?=
 RELAY_UPSTREAM_URL ?= https://github.com/David699/codex-mobile-relay.git
 RELAY_SOURCE_DIR ?= $(HOME)/.local/share/kodexlink-tools/codex-mobile-relay
 
 MARKDOWN_FILES := README.md TODO.md CHANGELOG.md LICENSE.md docs/*.md
-SHELL_FILES := scripts/kodexlink-relay.sh scripts/tailscale-cli-launcher
+SHELL_FILES := scripts/kodexlink-relay.sh scripts/tailscale-cli-launcher tests/relay-runtime-makefile-test.sh
+
+ifeq ($(RELAY_RUNTIME),docker)
+CHECK_REQUIRED_COMMANDS := "$(DOCKER)" "$(GIT)" curl
+RELAY_INSTALL_TARGET := install-relay-docker-prep
+RELAY_ENABLE_TARGET := enable-relay-docker
+RELAY_UPDATE_TARGET := update-relay-docker
+RELAY_START_TARGET := start-relay-docker
+RELAY_STOP_TARGET := stop-relay-docker
+RELAY_RESTART_TARGET := restart-relay-docker
+RELAY_STATUS_TARGET := status-relay-docker
+RELAY_LOGS_TARGET := logs-relay-docker
+RELAY_MEASURE_TARGET := measure-relay-docker
+RELAY_CONFIG_CHECK_TARGET := compose-config
+else ifeq ($(RELAY_RUNTIME),native)
+ifneq ($(NATIVE_DEPS),external)
+ifneq ($(NATIVE_DEPS),managed)
+$(error NATIVE_DEPS must be external or managed)
+endif
+endif
+CHECK_REQUIRED_COMMANDS := "$(GIT)" curl
+RELAY_INSTALL_TARGET := install-relay-native
+RELAY_ENABLE_TARGET := enable-relay-native
+RELAY_UPDATE_TARGET := update-relay-native
+RELAY_START_TARGET := native-start
+RELAY_STOP_TARGET := native-stop
+RELAY_RESTART_TARGET := native-restart
+RELAY_STATUS_TARGET := native-status
+RELAY_LOGS_TARGET := native-logs
+RELAY_MEASURE_TARGET := native-measure
+RELAY_CONFIG_CHECK_TARGET := native-config-check
+else
+$(error RELAY_RUNTIME must be docker or native)
+endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-deps require-kodexlink require-npm require-tailscale docker-start fetch-relay-source update-relay-source ensure-env configure-relay-source configure-url install install-all update enable disable install-relay install-tool-cli update-tool-cli install-tool install-tailscale-cli tailscale-serve tailscale-serve-off tailscale-funnel tailscale-funnel-off pair start stop restart status logs health measure print-url compose-config doctor doctor-relay doctor-tailscale doctor-mobile privacy-check lint check
+.PHONY: help check-deps require-kodexlink require-npm require-tailscale docker-start fetch-relay-source update-relay-source ensure-env configure-relay-source configure-url install install-all update enable disable install-relay install-relay-docker install-relay-docker-prep install-relay-native enable-relay-docker enable-relay-native update-relay-docker update-relay-native install-tool-cli update-tool-cli install-tool install-tailscale-cli tailscale-serve tailscale-serve-off tailscale-funnel tailscale-funnel-off pair start stop restart status logs health measure print-url compose-config native-config-check doctor doctor-relay doctor-tailscale doctor-mobile privacy-check lint check test start-relay-docker stop-relay-docker restart-relay-docker status-relay-docker logs-relay-docker measure-relay-docker native-start native-stop native-restart native-status native-logs native-measure
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = ":.*##" } /^[a-zA-Z_-]+:.*##/ { printf "  %-24s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 check-deps: ## Check common command dependencies
 	@missing=0; \
-	for cmd in "$(DOCKER)" "$(GIT)" curl; do \
+	for cmd in $(CHECK_REQUIRED_COMMANDS); do \
 		if ! command -v "$$cmd" >/dev/null 2>&1; then \
 			echo "Missing required command: $$cmd"; \
 			missing=1; \
@@ -54,8 +91,25 @@ docker-start: ## Start Docker Desktop if the daemon is not available
 	@if "$(DOCKER)" info >/dev/null 2>&1; then \
 		echo "Docker is running."; \
 	else \
-		echo "Starting Docker Desktop..."; \
-		open -ga Docker; \
+		case "$$(uname -s)" in \
+			Darwin) \
+				echo "Starting Docker Desktop..."; \
+				open -ga Docker; \
+				;; \
+			Linux) \
+				echo "Starting Docker service..."; \
+				if command -v systemctl >/dev/null 2>&1; then \
+					sudo systemctl start docker; \
+				else \
+					echo "Docker is not running and systemctl is unavailable."; \
+					exit 1; \
+				fi; \
+				;; \
+			*) \
+				echo "Docker is not running and this OS is unsupported by docker-start."; \
+				exit 1; \
+				;; \
+		esac; \
 		for attempt in {1..60}; do \
 			if "$(DOCKER)" info >/dev/null 2>&1; then \
 				echo "Docker is ready."; \
@@ -116,22 +170,22 @@ install-all: ## Install CLI launcher, upstream relay source, env, and desktop CL
 	@$(MAKE) ensure-env
 	@$(MAKE) configure-relay-source
 	@$(MAKE) configure-url
+	@$(MAKE) $(RELAY_INSTALL_TARGET)
 	@$(MAKE) install-tool-cli
 	@echo "Install complete. Services are configured but not enabled."
-	@echo "Run 'make enable' to start Docker, Tailscale Serve, and the KodexLink LaunchAgent."
+	@echo "Run 'make enable RELAY_RUNTIME=$(RELAY_RUNTIME)' to start the relay, Tailscale Serve, and the KodexLink desktop service."
 
 update: ## Update relay source and desktop CLI without deleting pairing data
 	@$(MAKE) fetch-relay-source
 	@$(MAKE) configure-relay-source
 	@$(MAKE) update-tool-cli
-	@$(MAKE) restart
+	@$(MAKE) $(RELAY_UPDATE_TARGET)
 	@$(MAKE) install-tool
-	@echo "Update complete. Existing paired devices are preserved because Docker volumes and the relay URL were not reset."
+	@echo "Update complete. Existing paired devices are preserved because relay storage and the relay URL were not reset."
 
 enable: ## Enable all runtime services
-	@$(MAKE) docker-start
 	@$(MAKE) ensure-env
-	@$(MAKE) start
+	@$(MAKE) $(RELAY_ENABLE_TARGET)
 	@$(MAKE) tailscale-serve
 	@$(MAKE) install-tool
 	@echo "Services enabled. Set the same HTTPS relay URL in the mobile app Custom Address, then run 'make pair'."
@@ -139,14 +193,39 @@ enable: ## Enable all runtime services
 disable: ## Disable all runtime services without deleting data
 	@./scripts/kodexlink-relay.sh desktop-service-stop || true
 	@./scripts/kodexlink-relay.sh tailscale-serve-off || true
-	@./scripts/kodexlink-relay.sh down || true
+	@$(MAKE) stop || true
 
-install-relay: ## Install and start the Docker relay stack
+install-relay: install-relay-docker ## Install and start the Docker relay stack
+
+install-relay-docker: ## Install and start the Docker relay stack
 	@$(MAKE) docker-start
 	@$(MAKE) fetch-relay-source
 	@$(MAKE) ensure-env
 	@$(MAKE) configure-relay-source
 	@./scripts/kodexlink-relay.sh up
+
+install-relay-docker-prep: ## Prepare Docker relay configuration without starting containers
+	@echo "Docker relay will be built and started by 'make enable' or 'make start'."
+
+install-relay-native: ## Install native relay with NATIVE_DEPS=external or managed
+	@$(MAKE) fetch-relay-source
+	@$(MAKE) ensure-env
+	@$(MAKE) configure-relay-source
+	@KODEXLINK_NATIVE_DEPS="$(NATIVE_DEPS)" DATABASE_URL="$(DATABASE_URL)" REDIS_URL="$(REDIS_URL)" ./scripts/kodexlink-relay.sh native-install
+
+enable-relay-docker: ## Start the Docker relay stack for enable
+	@$(MAKE) docker-start
+	@$(MAKE) start-relay-docker
+
+enable-relay-native: ## Start the native relay service for enable
+	@$(MAKE) native-start
+
+update-relay-docker: ## Rebuild and restart the Docker relay stack
+	@$(MAKE) restart-relay-docker
+
+update-relay-native: ## Rebuild and restart the native relay service
+	@KODEXLINK_NATIVE_DEPS="$(NATIVE_DEPS)" DATABASE_URL="$(DATABASE_URL)" REDIS_URL="$(REDIS_URL)" ./scripts/kodexlink-relay.sh native-build
+	@$(MAKE) native-restart
 
 install-tool-cli: require-npm ## Install the KodexLink desktop CLI from npm if missing
 	@if command -v "$(KODEXLINK)" >/dev/null 2>&1; then \
@@ -162,8 +241,23 @@ install-tool: ensure-env install-tool-cli require-kodexlink ## Install the Kodex
 	@./scripts/kodexlink-relay.sh desktop-service-install
 
 install-tailscale-cli: ## Install or refresh /usr/local/bin/tailscale
-	@sudo install -m 0755 scripts/tailscale-cli-launcher /usr/local/bin/tailscale
-	@/usr/local/bin/tailscale version
+	@case "$$(uname -s)" in \
+		Darwin) \
+			sudo install -m 0755 scripts/tailscale-cli-launcher /usr/local/bin/tailscale; \
+			/usr/local/bin/tailscale version; \
+			;; \
+		Linux) \
+			if command -v "$(TAILSCALE)" >/dev/null 2>&1; then \
+				"$(TAILSCALE)" version; \
+			else \
+				echo "Install Tailscale for Linux first: https://tailscale.com/download/linux"; \
+			fi; \
+			;; \
+		*) \
+			echo "Unsupported OS for install-tailscale-cli."; \
+			exit 1; \
+			;; \
+	esac
 
 tailscale-serve: ensure-env require-tailscale ## Publish the relay privately with Tailscale Serve
 	@./scripts/kodexlink-relay.sh tailscale-serve
@@ -180,30 +274,66 @@ tailscale-funnel-off: require-tailscale ## Disable the Tailscale Funnel HTTPS 44
 pair: ensure-env require-kodexlink ## Open the local QR pairing panel
 	@./scripts/kodexlink-relay.sh desktop-pair
 
-start: ## Start the Docker relay stack
-	@$(MAKE) docker-start
-	@./scripts/kodexlink-relay.sh up
+start: ## Start the selected relay runtime
+	@$(MAKE) $(RELAY_START_TARGET)
 
-stop: ## Stop the Docker relay stack
-	@./scripts/kodexlink-relay.sh down
+stop: ## Stop the selected relay runtime
+	@$(MAKE) $(RELAY_STOP_TARGET)
 
-restart: ## Restart the Docker relay stack
-	@$(MAKE) docker-start
-	@./scripts/kodexlink-relay.sh restart
+restart: ## Restart the selected relay runtime
+	@$(MAKE) $(RELAY_RESTART_TARGET)
 
-status: ## Show relay container status and desktop agent status
-	@./scripts/kodexlink-relay.sh status
+status: ## Show selected relay runtime status and desktop agent status
+	@$(MAKE) $(RELAY_STATUS_TARGET)
 	@echo
 	@./scripts/kodexlink-relay.sh desktop-status || true
 
-logs: ## Follow compose logs, optionally SERVICE=relay
+logs: ## Follow selected relay logs, optionally SERVICE=relay for Docker
+	@$(MAKE) $(RELAY_LOGS_TARGET)
+
+measure: ## Show one-shot selected relay runtime CPU and memory usage
+	@$(MAKE) $(RELAY_MEASURE_TARGET)
+
+start-relay-docker: ## Start the Docker relay stack
+	@$(MAKE) docker-start
+	@./scripts/kodexlink-relay.sh up
+
+stop-relay-docker: ## Stop the Docker relay stack
+	@./scripts/kodexlink-relay.sh down
+
+restart-relay-docker: ## Restart the Docker relay stack
+	@$(MAKE) docker-start
+	@./scripts/kodexlink-relay.sh restart
+
+status-relay-docker: ## Show relay container status
+	@./scripts/kodexlink-relay.sh status
+
+logs-relay-docker: ## Follow compose logs, optionally SERVICE=relay
 	@./scripts/kodexlink-relay.sh logs $(SERVICE)
+
+native-start: ## Start the native relay service
+	@KODEXLINK_NATIVE_DEPS="$(NATIVE_DEPS)" DATABASE_URL="$(DATABASE_URL)" REDIS_URL="$(REDIS_URL)" ./scripts/kodexlink-relay.sh native-service-start
+
+native-stop: ## Stop the native relay service
+	@./scripts/kodexlink-relay.sh native-service-stop
+
+native-restart: ## Restart the native relay service
+	@KODEXLINK_NATIVE_DEPS="$(NATIVE_DEPS)" DATABASE_URL="$(DATABASE_URL)" REDIS_URL="$(REDIS_URL)" ./scripts/kodexlink-relay.sh native-service-restart
+
+native-status: ## Show native relay service status
+	@./scripts/kodexlink-relay.sh native-service-status
+
+native-logs: ## Follow native relay service logs
+	@./scripts/kodexlink-relay.sh native-service-logs
 
 health: ## Check local relay health
 	@./scripts/kodexlink-relay.sh health
 
-measure: ## Show one-shot Docker CPU and memory usage
+measure-relay-docker: ## Show one-shot Docker CPU and memory usage
 	@./scripts/kodexlink-relay.sh measure
+
+native-measure: ## Show one-shot native relay CPU and memory usage
+	@./scripts/kodexlink-relay.sh native-measure
 
 print-url: ## Print the configured relay public URL
 	@./scripts/kodexlink-relay.sh public-url
@@ -211,9 +341,12 @@ print-url: ## Print the configured relay public URL
 compose-config: ensure-env ## Validate the Docker Compose configuration
 	@KODEXLINK_TOOLS_DIR="$(CURDIR)" "$(DOCKER)" compose --env-file "$(ENV_FILE)" -f "$(COMPOSE_FILE)" config >/dev/null
 
+native-config-check: ensure-env ## Validate native relay service configuration
+	@KODEXLINK_NATIVE_DEPS="$(NATIVE_DEPS)" DATABASE_URL="$(DATABASE_URL)" REDIS_URL="$(REDIS_URL)" ./scripts/kodexlink-relay.sh native-config-check
+
 doctor: doctor-relay doctor-tailscale doctor-mobile privacy-check ## Run setup diagnostics
 
-doctor-relay: ensure-env compose-config ## Check relay configuration and local health
+doctor-relay: ensure-env $(RELAY_CONFIG_CHECK_TARGET) ## Check selected relay configuration and local health
 	@./scripts/kodexlink-relay.sh health >/dev/null
 	@echo "Relay health endpoint is reachable on localhost."
 
@@ -246,4 +379,7 @@ lint: ## Lint Markdown and shell scripts
 	@$(MARKDOWNLINT) --config "$(MARKDOWNLINT_CONFIG)" $(MARKDOWN_FILES)
 	@$(SHELLCHECK) --enable=all $(SHELL_FILES)
 
-check: lint compose-config privacy-check ## Run local validation checks
+test: ## Run repository tests
+	@bash tests/relay-runtime-makefile-test.sh
+
+check: lint $(RELAY_CONFIG_CHECK_TARGET) privacy-check test ## Run local validation checks

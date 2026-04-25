@@ -1,7 +1,8 @@
 # Tailscale Private Relay Setup
 
-This guide configures KodexLink so the relay runs on this Mac in Docker while
-Tailscale Serve publishes it privately to devices in the tailnet.
+This guide configures KodexLink so the relay runs on this host with Docker or a
+native service while Tailscale Serve publishes it privately to devices in the
+tailnet.
 
 ## Table of Contents
 
@@ -10,7 +11,7 @@ Tailscale Serve publishes it privately to devices in the tailnet.
 - [Why Tailscale Serve](#why-tailscale-serve)
 - [Tailscale Admin Setup](#tailscale-admin-setup)
 - [Tailscale CLI Setup](#tailscale-cli-setup)
-- [Mac Setup](#mac-setup)
+- [Host Setup](#host-setup)
 - [iPhone And iPad Setup](#iphone-and-ipad-setup)
 - [Optional Exit Node](#optional-exit-node)
 - [Verification](#verification)
@@ -23,8 +24,8 @@ Tailscale Serve publishes it privately to devices in the tailnet.
 flowchart LR
   Phone["iPhone / iPad\nTailscale connected"]
   Serve["Tailscale Serve\nHTTPS on *.ts.net"]
-  Relay["Docker relay\n127.0.0.1:8787"]
-  Agent["KodexLink desktop agent\nmacOS LaunchAgent"]
+  Relay["Docker or native relay\n127.0.0.1:8787"]
+  Agent["KodexLink desktop agent\nhost service"]
   Codex["Local Codex CLI\ncodex app-server"]
 
   Phone -->|"https://mac.tailnet.ts.net"| Serve
@@ -50,7 +51,7 @@ home.
 Tailscale being connected on the Mac does not automatically publish local Mac
 ports. It puts the Mac and phone on the same private tailnet.
 
-The Docker relay intentionally binds to:
+The relay intentionally binds to:
 
 ```text
 127.0.0.1:8787
@@ -59,9 +60,9 @@ The Docker relay intentionally binds to:
 That address is private to the Mac. From the iPhone, `127.0.0.1` means the
 iPhone itself, not the Mac.
 
-Binding Docker to `0.0.0.0` or to the Mac's Tailscale interface would make the
-relay reachable as plain HTTP. The mobile app should use a normal OS-trusted
-HTTPS endpoint for remote access.
+Binding the relay to `0.0.0.0` or to the host's Tailscale interface would make
+the relay reachable as plain HTTP. The mobile app should use a normal
+OS-trusted HTTPS endpoint for remote access.
 
 Tailscale Serve provides that private HTTPS proxy:
 
@@ -134,9 +135,9 @@ Use the DNS name without the trailing dot when configuring KodexLink:
 https://machine-name.tailnet-name.ts.net
 ```
 
-## Mac Setup
+## Host Setup
 
-Install and log in to Tailscale on the Mac. Then run:
+Install and log in to Tailscale on the host. Docker is the default runtime:
 
 ```bash
 make install PUBLIC_URL=https://machine-name.tailnet-name.ts.net
@@ -144,14 +145,30 @@ make enable
 make doctor
 ```
 
+Use native mode when Docker should not be used:
+
+```bash
+make install RELAY_RUNTIME=native \
+  DATABASE_URL=postgres://user:password@127.0.0.1:5432/codex_mobile \
+  REDIS_URL=redis://127.0.0.1:6379 \
+  PUBLIC_URL=https://machine-name.tailnet-name.ts.net
+make enable RELAY_RUNTIME=native
+make doctor RELAY_RUNTIME=native
+```
+
+Native mode defaults to `NATIVE_DEPS=external`; it uses existing PostgreSQL and
+Redis connection URLs and does not install those services. Use
+`NATIVE_DEPS=managed` only when local database services should be installed and
+configured by the helper.
+
 `make install` creates the private env file outside the repository:
 
 ```text
 ~/.config/kodexlink-tools/relay.env
 ```
 
-`make enable` starts the Docker relay stack, configures Tailscale Serve, and
-installs the KodexLink desktop LaunchAgent.
+`make enable` starts the selected relay runtime, configures Tailscale Serve,
+and installs the KodexLink desktop service.
 
 The project Serve command maps:
 
@@ -287,6 +304,14 @@ If Docker Desktop was not running:
 ```bash
 make docker-start
 make start
+```
+
+For native installs, pass the runtime parameter when restarting or checking the
+service:
+
+```bash
+make restart RELAY_RUNTIME=native
+make status RELAY_RUNTIME=native
 ```
 
 ## References
