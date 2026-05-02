@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file.
 - `make doctor` now reports a clearer remediation hint when the configured
   mobile-facing HTTPS URL fails because the node hostname or certificate no
   longer matches.
+- Switching the shared Tailscale HTTPS port now tears down the previously
+  configured Serve or Funnel port mapping before enabling or disabling the new
+  one, so stale endpoints are not left published.
 
 ### New
 

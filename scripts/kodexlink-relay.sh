@@ -93,6 +93,7 @@ load_env() {
   load_env_key KODEXLINK_RELAY_REPO
   load_env_key KODEXLINK_RELAY_PUBLIC_BASE_URL
   load_env_key KODEXLINK_TAILSCALE_HTTPS_PORT
+  load_env_key KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT
   load_env_key KODEXLINK_RELAY_HOST_PORT
   load_env_key KODEXLINK_POSTGRES_DB
   load_env_key KODEXLINK_POSTGRES_USER
@@ -154,6 +155,21 @@ write_env_assignment() {
 
   [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] || fail "${key} cannot contain newlines"
   printf '%s=%s\n' "${key}" "${value}"
+}
+
+current_env_value() {
+  local key="$1"
+  local value
+  local rc
+
+  set +e
+  value="$(env_value "${key}")"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 ]]; then
+    printf '%s\n' "${value}"
+  fi
 }
 
 compose() {
@@ -270,10 +286,17 @@ set_relay_repo() {
 
 set_https_port() {
   local https_port="${1:-}"
+  local current_https_port=""
+  local previous_https_port=""
   validate_tailscale_https_port "${https_port}"
 
   if [[ ! -f "${ENV_FILE}" ]]; then
     init_env
+  fi
+
+  current_https_port="$(current_env_value KODEXLINK_TAILSCALE_HTTPS_PORT)"
+  if [[ -n "${current_https_port}" && "${current_https_port}" != "${https_port}" ]]; then
+    previous_https_port="${current_https_port}"
   fi
 
   local tmp_file
@@ -282,11 +305,18 @@ set_https_port() {
   fi
 
   local found=0
+  local previous_found=0
   while IFS= read -r line || [[ -n "${line}" ]]; do
     case "${line}" in
       KODEXLINK_TAILSCALE_HTTPS_PORT=*)
         write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT "${https_port}"
         found=1
+        ;;
+      KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT=*)
+        if [[ -n "${previous_https_port}" ]]; then
+          write_env_assignment KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT "${previous_https_port}"
+          previous_found=1
+        fi
         ;;
       *)
         printf '%s\n' "${line}"
@@ -296,6 +326,10 @@ set_https_port() {
 
   if [[ "${found}" -eq 0 ]]; then
     write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT "${https_port}" >> "${tmp_file}"
+  fi
+
+  if [[ -n "${previous_https_port}" && "${previous_found}" -eq 0 ]]; then
+    write_env_assignment KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT "${previous_https_port}" >> "${tmp_file}"
   fi
 
   mv "${tmp_file}" "${ENV_FILE}"
@@ -379,6 +413,83 @@ tailscale_https_port() {
   printf '%s\n' "${https_port}"
 }
 
+tailscale_previous_https_port() {
+  local current_https_port
+  local previous_https_port="${KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT:-}"
+
+  current_https_port="$(tailscale_https_port)"
+  if [[ -z "${previous_https_port}" || "${previous_https_port}" == "${current_https_port}" ]]; then
+    return 1
+  fi
+
+  [[ "${previous_https_port}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "${previous_https_port}"
+}
+
+current_previous_https_port() {
+  local value
+  local rc
+
+  set +e
+  value="$(tailscale_previous_https_port)"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 ]]; then
+    printf '%s\n' "${value}"
+  fi
+}
+
+clear_previous_https_port_marker() {
+  [[ -f "${ENV_FILE}" ]] || return 0
+
+  local tmp_file
+  if ! tmp_file="$(mktemp "${ENV_FILE}.XXXXXX")"; then
+    fail "failed to create temporary file"
+  fi
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT=*)
+        ;;
+      *)
+        printf '%s\n' "${line}"
+        ;;
+    esac
+  done < "${ENV_FILE}" > "${tmp_file}"
+
+  mv "${tmp_file}" "${ENV_FILE}"
+  chmod 0600 "${ENV_FILE}"
+}
+
+disable_previous_tailscale_serve_port() {
+  local previous_https_port
+
+  previous_https_port="$(current_previous_https_port)"
+  if [[ -z "${previous_https_port}" ]]; then
+    return 0
+  fi
+
+  tailscale serve --https="${previous_https_port}" off >/dev/null 2>&1 || true
+}
+
+disable_previous_tailscale_funnel_port() {
+  local previous_https_port
+
+  previous_https_port="$(current_previous_https_port)"
+  if [[ -z "${previous_https_port}" ]]; then
+    return 0
+  fi
+
+  case "${previous_https_port}" in
+    443|8443|10000)
+      tailscale funnel --https="${previous_https_port}" off >/dev/null 2>&1 || true
+      ;;
+    *)
+      ;;
+  esac
+}
+
 tailscale_serve() {
   require_tailscale
   load_env
@@ -386,7 +497,9 @@ tailscale_serve() {
   local https_port
   target="$(tailscale_target)"
   https_port="$(tailscale_https_port)"
+  disable_previous_tailscale_serve_port
   tailscale serve --bg --https="${https_port}" "${target}"
+  clear_previous_https_port_marker
   tailscale serve status
 }
 
@@ -396,6 +509,8 @@ tailscale_serve_off() {
   local https_port
   https_port="$(tailscale_https_port)"
   tailscale serve --https="${https_port}" off
+  disable_previous_tailscale_serve_port
+  clear_previous_https_port_marker
   tailscale serve status
 }
 
@@ -406,7 +521,9 @@ tailscale_funnel() {
   local https_port
   target="$(tailscale_target)"
   https_port="$(tailscale_https_port)"
+  disable_previous_tailscale_funnel_port
   tailscale funnel --bg --https="${https_port}" "${target}"
+  clear_previous_https_port_marker
   tailscale funnel status
 }
 
@@ -422,6 +539,8 @@ tailscale_funnel_off() {
   local https_port
   https_port="$(tailscale_https_port)"
   tailscale funnel --https="${https_port}" off
+  disable_previous_tailscale_funnel_port
+  clear_previous_https_port_marker
   tailscale funnel status
 }
 
