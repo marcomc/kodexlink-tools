@@ -287,6 +287,7 @@ set_relay_repo() {
 set_https_port() {
   local https_port="${1:-}"
   local current_https_port=""
+  local existing_previous_https_port=""
   local previous_https_port=""
   validate_tailscale_https_port "${https_port}"
 
@@ -295,7 +296,10 @@ set_https_port() {
   fi
 
   current_https_port="$(current_env_value KODEXLINK_TAILSCALE_HTTPS_PORT)"
-  if [[ -n "${current_https_port}" && "${current_https_port}" != "${https_port}" ]]; then
+  existing_previous_https_port="$(current_env_value KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT)"
+  if [[ -n "${existing_previous_https_port}" ]]; then
+    previous_https_port="${existing_previous_https_port}"
+  elif [[ -n "${current_https_port}" && "${current_https_port}" != "${https_port}" ]]; then
     previous_https_port="${current_https_port}"
   fi
 

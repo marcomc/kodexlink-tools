@@ -16,6 +16,9 @@ All notable changes to this project are documented in this file.
 - Switching the shared Tailscale HTTPS port now tears down the previously
   configured Serve or Funnel port mapping before enabling or disabling the new
   one, so stale endpoints are not left published.
+- Makefile targets now honor `ENV_FILE` consistently when they invoke the relay
+  management script, so alternate environment files are updated and validated
+  in the intended location.
 
 ### New
 
