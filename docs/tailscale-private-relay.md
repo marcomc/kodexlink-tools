@@ -168,7 +168,8 @@ That file is the supported configuration source for this setup. The most useful
 keys are:
 
 - `KODEXLINK_RELAY_PUBLIC_BASE_URL` for the mobile-facing HTTPS URL.
-- `KODEXLINK_TAILSCALE_HTTPS_PORT` for the published Tailscale HTTPS port.
+- `KODEXLINK_TAILSCALE_HTTPS_PORT` for the shared published Tailscale
+  Serve/Funnel HTTPS port. Valid values are `443`, `8443`, or `10000`.
 - `KODEXLINK_RELAY_HOST_PORT` for the local Docker port only.
 
 Do not edit the KodexLink LaunchAgent plist to change relay URL or port. The

@@ -56,6 +56,20 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+validate_tailscale_https_port() {
+  local https_port="${1:-}"
+  [[ -n "${https_port}" ]] || fail "usage: ./scripts/kodexlink-relay.sh set-https-port 443"
+  [[ "${https_port}" =~ ^[0-9]+$ ]] || fail "HTTPS port must be numeric"
+
+  case "${https_port}" in
+    443|8443|10000)
+      ;;
+    *)
+      fail "HTTPS port must be one of 443, 8443, or 10000 because the same setting is used for Tailscale Serve and Funnel"
+      ;;
+  esac
+}
+
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 24
@@ -256,9 +270,7 @@ set_relay_repo() {
 
 set_https_port() {
   local https_port="${1:-}"
-  [[ -n "${https_port}" ]] || fail "usage: ./scripts/kodexlink-relay.sh set-https-port 443"
-  [[ "${https_port}" =~ ^[0-9]+$ ]] || fail "HTTPS port must be numeric"
-  (( https_port >= 1 && https_port <= 65535 )) || fail "HTTPS port must be between 1 and 65535"
+  validate_tailscale_https_port "${https_port}"
 
   if [[ ! -f "${ENV_FILE}" ]]; then
     init_env
@@ -362,7 +374,9 @@ tailscale_target() {
 }
 
 tailscale_https_port() {
-  printf '%s\n' "${KODEXLINK_TAILSCALE_HTTPS_PORT:-443}"
+  local https_port="${KODEXLINK_TAILSCALE_HTTPS_PORT:-443}"
+  validate_tailscale_https_port "${https_port}"
+  printf '%s\n' "${https_port}"
 }
 
 tailscale_serve() {

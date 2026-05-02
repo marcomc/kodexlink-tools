@@ -40,14 +40,15 @@ The generated runtime environment lives outside this repository:
 In that file:
 
 - `KODEXLINK_RELAY_PUBLIC_BASE_URL` is the mobile-facing URL.
-- `KODEXLINK_TAILSCALE_HTTPS_PORT` is the published Tailscale HTTPS port.
+- `KODEXLINK_TAILSCALE_HTTPS_PORT` is the shared published Tailscale
+  Serve/Funnel HTTPS port and must be `443`, `8443`, or `10000`.
 - `KODEXLINK_RELAY_HOST_PORT` is only the local Docker port.
 
 With Tailscale Serve, the public URL should normally be
 `https://machine-name.tailnet-name.ts.net` without `:8787`; Tailscale proxies
 HTTPS port `443` to the local Docker port. If port `443` is already occupied by
 another local reverse proxy, you can persist a different published HTTPS port
-such as `8443` and use a public URL like
+such as `8443` or `10000` and use a public URL like
 `https://machine-name.tailnet-name.ts.net:8443`.
 
 The LaunchAgent is not the configuration source for relay URL or port. The

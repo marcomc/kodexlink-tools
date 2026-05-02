@@ -114,10 +114,10 @@ configure-url: ensure-env ## Prompt for or set the relay public HTTPS URL
 		./scripts/kodexlink-relay.sh set-public-url "$$public_url"; \
 	fi
 
-configure-https-port: ensure-env ## Persist the Tailscale HTTPS port for Serve/Funnel, for example HTTPS_PORT=8443
+configure-https-port: ensure-env ## Persist the shared Tailscale Serve/Funnel HTTPS port: 443, 8443, or 10000
 	@https_port="$(HTTPS_PORT)"; \
 	if [[ -z "$$https_port" ]]; then \
-		read -r -p "Tailscale HTTPS port, for example 443 or 8443: " https_port; \
+		read -r -p "Tailscale HTTPS port (443, 8443, or 10000): " https_port; \
 	fi; \
 	if [[ -z "$$https_port" ]]; then \
 		echo "No HTTPS port provided."; \

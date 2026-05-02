@@ -67,7 +67,8 @@ This file is the supported place to persist relay networking settings.
 
 - `KODEXLINK_RELAY_PUBLIC_BASE_URL` must be the same HTTPS URL entered in the
   mobile app Custom Address setting.
-- `KODEXLINK_TAILSCALE_HTTPS_PORT` is the Tailscale Serve or Funnel HTTPS port.
+- `KODEXLINK_TAILSCALE_HTTPS_PORT` is the shared Tailscale Serve or Funnel
+  HTTPS port. Valid values are `443`, `8443`, or `10000`.
 - `KODEXLINK_RELAY_HOST_PORT` is only the local Docker port.
 
 Do not edit the LaunchAgent plist to change relay URL or port. The LaunchAgent
@@ -86,7 +87,7 @@ include `:8787`, because the phone connects to HTTPS port `443` and Tailscale
 proxies that traffic to `http://127.0.0.1:8787` on the Mac.
 
 If another service already owns host port `443`, publish KodexLink on `8443`
-or another HTTPS port instead. In that case,
+or `10000` instead. In that case,
 `KODEXLINK_RELAY_PUBLIC_BASE_URL` should include the port, for example
 `https://machine-name.tailnet-name.ts.net:8443`.
 

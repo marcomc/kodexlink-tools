@@ -18,7 +18,7 @@ All notable changes to this project are documented in this file.
 - Added `make curl` for quickly fetching relay JSON locally or through the
   configured public HTTPS URL.
 - Added configurable Tailscale HTTPS publishing ports, so the relay can be
-  exposed on `8443` or another port when host port `443` is already in use.
+  exposed on `8443` or `10000` when host port `443` is already in use.
 
 ## [0.1.0] - 2026-04-25
 
