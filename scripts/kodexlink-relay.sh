@@ -162,6 +162,8 @@ current_env_value() {
   local value
   local rc
 
+  [[ -f "${ENV_FILE}" && -r "${ENV_FILE}" ]] || return 1
+
   set +e
   value="$(env_value "${key}")"
   rc=$?
@@ -413,7 +415,13 @@ tailscale_target() {
 }
 
 tailscale_https_port() {
-  local https_port="${KODEXLINK_TAILSCALE_HTTPS_PORT:-443}"
+  local https_port="${KODEXLINK_TAILSCALE_HTTPS_PORT:-}"
+
+  if [[ -z "${https_port}" ]]; then
+    https_port="$(current_env_value KODEXLINK_TAILSCALE_HTTPS_PORT)"
+  fi
+
+  https_port="${https_port:-443}"
   validate_tailscale_https_port "${https_port}"
   printf '%s\n' "${https_port}"
 }
@@ -421,6 +429,10 @@ tailscale_https_port() {
 tailscale_previous_https_port() {
   local current_https_port
   local previous_https_port="${KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT:-}"
+
+  if [[ -z "${previous_https_port}" ]]; then
+    previous_https_port="$(current_env_value KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT)"
+  fi
 
   current_https_port="$(tailscale_https_port)"
   if [[ -z "${previous_https_port}" || "${previous_https_port}" == "${current_https_port}" ]]; then
@@ -467,6 +479,25 @@ clear_previous_https_port_marker() {
   chmod 0600 "${ENV_FILE}"
 }
 
+run_tailscale_https_off() {
+  local mode="$1"
+  local https_port="$2"
+  local output
+  local rc
+
+  set +e
+  output="$(tailscale "${mode}" --https="${https_port}" off 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 || "${output}" == *"handler does not exist"* ]]; then
+    return 0
+  fi
+
+  [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
+  return "${rc}"
+}
+
 disable_previous_tailscale_serve_port() {
   local previous_https_port
 
@@ -475,7 +506,7 @@ disable_previous_tailscale_serve_port() {
     return 0
   fi
 
-  tailscale serve --https="${previous_https_port}" off >/dev/null 2>&1 || true
+  run_tailscale_https_off serve "${previous_https_port}"
 }
 
 disable_previous_tailscale_funnel_port() {
@@ -488,7 +519,7 @@ disable_previous_tailscale_funnel_port() {
 
   case "${previous_https_port}" in
     443|8443|10000)
-      tailscale funnel --https="${previous_https_port}" off >/dev/null 2>&1 || true
+      run_tailscale_https_off funnel "${previous_https_port}"
       ;;
     *)
       ;;
@@ -515,11 +546,10 @@ tailscale_serve() {
 
 tailscale_serve_off() {
   require_tailscale
-  load_env
   local https_port
   https_port="$(tailscale_https_port)"
   disable_previous_tailscale_https_ports
-  tailscale serve --https="${https_port}" off >/dev/null 2>&1 || true
+  run_tailscale_https_off serve "${https_port}"
   clear_previous_https_port_marker
   tailscale serve status
 }
@@ -545,11 +575,10 @@ tailscale_funnel_off() {
     return 0
   fi
 
-  load_env
   local https_port
   https_port="$(tailscale_https_port)"
   disable_previous_tailscale_https_ports
-  tailscale funnel --https="${https_port}" off >/dev/null 2>&1 || true
+  run_tailscale_https_off funnel "${https_port}"
   clear_previous_https_port_marker
   tailscale funnel status
 }
