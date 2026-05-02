@@ -379,7 +379,9 @@ tailscale_serve() {
 tailscale_serve_off() {
   require_tailscale
   load_env
-  tailscale serve --https="$(tailscale_https_port)" off
+  local https_port
+  https_port="$(tailscale_https_port)"
+  tailscale serve --https="${https_port}" off
   tailscale serve status
 }
 
@@ -403,7 +405,9 @@ tailscale_funnel_off() {
   fi
 
   load_env
-  tailscale funnel --https="$(tailscale_https_port)" off
+  local https_port
+  https_port="$(tailscale_https_port)"
+  tailscale funnel --https="${https_port}" off
   tailscale funnel status
 }
 
