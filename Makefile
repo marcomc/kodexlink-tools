@@ -103,7 +103,7 @@ configure-url: ensure-env ## Prompt for or set the relay public HTTPS URL
 	public_url="$(PUBLIC_URL)"; \
 	if [[ -n "$$public_url" ]]; then \
 		./scripts/kodexlink-relay.sh set-public-url "$$public_url"; \
-	elif [[ -n "$$configured_url" ]]; then \
+	elif [[ -n "$$configured_url" && "$$configured_url" != "$(DEFAULT_PUBLIC_URL)" ]]; then \
 		echo "Reusing relay URL from $(ENV_FILE): $$configured_url"; \
 	else \
 		read -r -p "Relay HTTPS URL, for example https://machine-name.tailnet-name.ts.net: " public_url; \

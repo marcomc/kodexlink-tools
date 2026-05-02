@@ -8,7 +8,8 @@ All notable changes to this project are documented in this file.
 
 - `make install` and `make configure-url` now reuse the existing
   `~/.config/kodexlink-tools/relay.env` relay URL instead of prompting again
-  after a reinstall or refresh.
+  after a reinstall or refresh, while still prompting on first install when the
+  env file only contains the bootstrap localhost placeholder.
 - `make doctor` now reports a clearer remediation hint when the configured
   mobile-facing HTTPS URL fails because the node hostname or certificate no
   longer matches.
