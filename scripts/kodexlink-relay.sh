@@ -490,6 +490,11 @@ disable_previous_tailscale_funnel_port() {
   esac
 }
 
+disable_previous_tailscale_https_ports() {
+  disable_previous_tailscale_serve_port
+  disable_previous_tailscale_funnel_port
+}
+
 tailscale_serve() {
   require_tailscale
   load_env
@@ -497,7 +502,7 @@ tailscale_serve() {
   local https_port
   target="$(tailscale_target)"
   https_port="$(tailscale_https_port)"
-  disable_previous_tailscale_serve_port
+  disable_previous_tailscale_https_ports
   tailscale serve --bg --https="${https_port}" "${target}"
   clear_previous_https_port_marker
   tailscale serve status
@@ -508,8 +513,8 @@ tailscale_serve_off() {
   load_env
   local https_port
   https_port="$(tailscale_https_port)"
-  tailscale serve --https="${https_port}" off
-  disable_previous_tailscale_serve_port
+  disable_previous_tailscale_https_ports
+  tailscale serve --https="${https_port}" off >/dev/null 2>&1 || true
   clear_previous_https_port_marker
   tailscale serve status
 }
@@ -521,7 +526,7 @@ tailscale_funnel() {
   local https_port
   target="$(tailscale_target)"
   https_port="$(tailscale_https_port)"
-  disable_previous_tailscale_funnel_port
+  disable_previous_tailscale_https_ports
   tailscale funnel --bg --https="${https_port}" "${target}"
   clear_previous_https_port_marker
   tailscale funnel status
@@ -538,8 +543,8 @@ tailscale_funnel_off() {
   load_env
   local https_port
   https_port="$(tailscale_https_port)"
-  tailscale funnel --https="${https_port}" off
-  disable_previous_tailscale_funnel_port
+  disable_previous_tailscale_https_ports
+  tailscale funnel --https="${https_port}" off >/dev/null 2>&1 || true
   clear_previous_https_port_marker
   tailscale funnel status
 }
