@@ -20,12 +20,14 @@ Commands:
   init-env [public-url]       Create relay.env with generated database password.
   set-relay-repo <path>       Update the upstream relay source directory.
   set-public-url <url>        Update KODEXLINK_RELAY_PUBLIC_BASE_URL.
+  set-https-port <port>       Update KODEXLINK_TAILSCALE_HTTPS_PORT.
   up                          Build and start PostgreSQL, Redis, and relay.
   down                        Stop containers.
   restart                     Restart containers.
   status                      Show container status.
   logs [service]              Follow logs for all services or one service.
   health                      Check local relay health endpoint.
+  curl-relay [path] [scope]   Fetch relay JSON, defaulting to /healthz and local scope.
   measure                     Print one-shot Docker CPU and memory stats.
   public-url                  Print the configured public relay base URL.
   desktop-start               Start KodexLink desktop agent with this relay.
@@ -76,6 +78,7 @@ load_env() {
   load_env_key KODEXLINK_TOOLS_DIR
   load_env_key KODEXLINK_RELAY_REPO
   load_env_key KODEXLINK_RELAY_PUBLIC_BASE_URL
+  load_env_key KODEXLINK_TAILSCALE_HTTPS_PORT
   load_env_key KODEXLINK_RELAY_HOST_PORT
   load_env_key KODEXLINK_POSTGRES_DB
   load_env_key KODEXLINK_POSTGRES_USER
@@ -166,6 +169,7 @@ init_env() {
     write_env_assignment KODEXLINK_TOOLS_DIR "${ROOT_DIR}"
     write_env_assignment KODEXLINK_RELAY_REPO "${DEFAULT_RELAY_REPO}"
     write_env_assignment KODEXLINK_RELAY_PUBLIC_BASE_URL "${public_url}"
+    write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT 443
     write_env_assignment KODEXLINK_RELAY_HOST_PORT 8787
     write_env_assignment KODEXLINK_POSTGRES_DB codex_mobile
     write_env_assignment KODEXLINK_POSTGRES_USER kodexlink
@@ -250,11 +254,74 @@ set_relay_repo() {
   info "updated relay source directory"
 }
 
+set_https_port() {
+  local https_port="${1:-}"
+  [[ -n "${https_port}" ]] || fail "usage: ./scripts/kodexlink-relay.sh set-https-port 443"
+  [[ "${https_port}" =~ ^[0-9]+$ ]] || fail "HTTPS port must be numeric"
+  (( https_port >= 1 && https_port <= 65535 )) || fail "HTTPS port must be between 1 and 65535"
+
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    init_env
+  fi
+
+  local tmp_file
+  if ! tmp_file="$(mktemp "${ENV_FILE}.XXXXXX")"; then
+    fail "failed to create temporary file"
+  fi
+
+  local found=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      KODEXLINK_TAILSCALE_HTTPS_PORT=*)
+        write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT "${https_port}"
+        found=1
+        ;;
+      *)
+        printf '%s\n' "${line}"
+        ;;
+    esac
+  done < "${ENV_FILE}" > "${tmp_file}"
+
+  if [[ "${found}" -eq 0 ]]; then
+    write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT "${https_port}" >> "${tmp_file}"
+  fi
+
+  mv "${tmp_file}" "${ENV_FILE}"
+  chmod 0600 "${ENV_FILE}"
+  info "updated Tailscale HTTPS port: ${https_port}"
+}
+
 health() {
   load_env
   local port="${KODEXLINK_RELAY_HOST_PORT:-8787}"
   require_command curl
   curl -fsS "http://127.0.0.1:${port}/healthz"
+  printf '\n'
+}
+
+curl_relay() {
+  load_env
+  require_command curl
+
+  local path="${1:-/healthz}"
+  local scope="${2:-local}"
+  local base_url
+
+  [[ "${path}" == /* ]] || path="/${path}"
+
+  case "${scope}" in
+    local)
+      base_url="http://127.0.0.1:${KODEXLINK_RELAY_HOST_PORT:-8787}"
+      ;;
+    public)
+      base_url="${KODEXLINK_RELAY_PUBLIC_BASE_URL:?}"
+      ;;
+    *)
+      fail "usage: ./scripts/kodexlink-relay.sh curl-relay [/path] [local|public]"
+      ;;
+  esac
+
+  curl -fsS "${base_url%/}${path}"
   printf '\n'
 }
 
@@ -294,18 +361,25 @@ tailscale_target() {
   printf 'http://127.0.0.1:%s\n' "${KODEXLINK_RELAY_HOST_PORT:-8787}"
 }
 
+tailscale_https_port() {
+  printf '%s\n' "${KODEXLINK_TAILSCALE_HTTPS_PORT:-443}"
+}
+
 tailscale_serve() {
   require_tailscale
   load_env
   local target
+  local https_port
   target="$(tailscale_target)"
-  tailscale serve --bg --https=443 "${target}"
+  https_port="$(tailscale_https_port)"
+  tailscale serve --bg --https="${https_port}" "${target}"
   tailscale serve status
 }
 
 tailscale_serve_off() {
   require_tailscale
-  tailscale serve --https=443 off
+  load_env
+  tailscale serve --https="$(tailscale_https_port)" off
   tailscale serve status
 }
 
@@ -313,8 +387,10 @@ tailscale_funnel() {
   require_tailscale
   load_env
   local target
+  local https_port
   target="$(tailscale_target)"
-  tailscale funnel --bg --https=443 "${target}"
+  https_port="$(tailscale_https_port)"
+  tailscale funnel --bg --https="${https_port}" "${target}"
   tailscale funnel status
 }
 
@@ -326,7 +402,8 @@ tailscale_funnel_off() {
     return 0
   fi
 
-  tailscale funnel --https=443 off
+  load_env
+  tailscale funnel --https="$(tailscale_https_port)" off
   tailscale funnel status
 }
 
@@ -342,6 +419,10 @@ case "${1:-}" in
   set-public-url)
     shift
     set_public_url "${1:-}"
+    ;;
+  set-https-port)
+    shift
+    set_https_port "${1:-}"
     ;;
   up)
     compose up -d --build postgres redis relay
@@ -363,6 +444,10 @@ case "${1:-}" in
     ;;
   health)
     health
+    ;;
+  curl-relay)
+    shift
+    curl_relay "${1:-}" "${2:-local}"
     ;;
   measure)
     measure

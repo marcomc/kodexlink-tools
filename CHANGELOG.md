@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- `make install` and `make configure-url` now reuse the existing
+  `~/.config/kodexlink-tools/relay.env` relay URL instead of prompting again
+  after a reinstall or refresh.
+- `make doctor` now reports a clearer remediation hint when the configured
+  mobile-facing HTTPS URL fails because the node hostname or certificate no
+  longer matches.
+
+### New
+
+- Added `make curl` for quickly fetching relay JSON locally or through the
+  configured public HTTPS URL.
+- Added configurable Tailscale HTTPS publishing ports, so the relay can be
+  exposed on `8443` or another port when host port `443` is already in use.
+
 ## [0.1.0] - 2026-04-25
 
 ### Added

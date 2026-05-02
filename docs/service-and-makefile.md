@@ -52,14 +52,26 @@ make update
 make disable
 ```
 
+Those `make` commands are the supported operational interface. In particular,
+`make enable` already starts Docker, configures Tailscale Serve with the saved
+HTTPS port, and refreshes the LaunchAgent. Direct `tailscale ...` commands are
+mainly for verification and troubleshooting.
+
 The private runtime environment file is created outside the repository:
 
 ```text
 ~/.config/kodexlink-tools/relay.env
 ```
 
-`KODEXLINK_RELAY_PUBLIC_BASE_URL` must be the same HTTPS URL entered in the
-mobile app Custom Address setting.
+This file is the supported place to persist relay networking settings.
+
+- `KODEXLINK_RELAY_PUBLIC_BASE_URL` must be the same HTTPS URL entered in the
+  mobile app Custom Address setting.
+- `KODEXLINK_TAILSCALE_HTTPS_PORT` is the Tailscale Serve or Funnel HTTPS port.
+- `KODEXLINK_RELAY_HOST_PORT` is only the local Docker port.
+
+Do not edit the LaunchAgent plist to change relay URL or port. The LaunchAgent
+only supervises the background desktop agent process.
 
 Do not confuse the public URL with the local Docker port:
 
@@ -72,6 +84,11 @@ Do not confuse the public URL with the local Docker port:
 For the recommended Tailscale Serve setup, the public URL normally does not
 include `:8787`, because the phone connects to HTTPS port `443` and Tailscale
 proxies that traffic to `http://127.0.0.1:8787` on the Mac.
+
+If another service already owns host port `443`, publish KodexLink on `8443`
+or another HTTPS port instead. In that case,
+`KODEXLINK_RELAY_PUBLIC_BASE_URL` should include the port, for example
+`https://machine-name.tailnet-name.ts.net:8443`.
 
 ## Repository Clone Lifecycle
 
@@ -111,6 +128,16 @@ make doctor
 make pair
 ```
 
+Alternative first install when `443` is already in use:
+
+```bash
+make check-deps
+make install HTTPS_PORT=8443 PUBLIC_URL=https://machine-name.tailnet-name.ts.net:8443
+make enable
+make doctor
+make pair
+```
+
 `make install` prepares the machine but does not enable runtime services. It:
 
 - installs or refreshes the Tailscale CLI launcher;
@@ -141,6 +168,14 @@ If only the relay URL changed:
 make configure-url PUBLIC_URL=https://machine-name.tailnet-name.ts.net
 make restart
 make pair
+```
+
+If only the published HTTPS port changed:
+
+```bash
+make configure-https-port HTTPS_PORT=8443
+make configure-url PUBLIC_URL=https://machine-name.tailnet-name.ts.net:8443
+make enable
 ```
 
 `make restart` reapplies the Docker Compose configuration so environment changes
@@ -322,6 +357,10 @@ make doctor-tailscale
 make doctor-mobile
 make privacy-check
 ```
+
+These are checks only. They help confirm that the saved `make` configuration is
+healthy, but they are not additional setup steps required after a normal
+`make enable`.
 
 Logs and status:
 

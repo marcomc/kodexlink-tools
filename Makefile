@@ -13,6 +13,7 @@ COMPOSE_FILE ?= docker-compose.kodexlink-relay.yml
 MARKDOWNLINT_CONFIG ?= $(HOME)/.markdownlint.json
 DEFAULT_PUBLIC_URL ?= http://127.0.0.1:8787
 PUBLIC_URL ?=
+HTTPS_PORT ?=
 RELAY_UPSTREAM_URL ?= https://github.com/David699/codex-mobile-relay.git
 RELAY_SOURCE_DIR ?= $(HOME)/.local/share/kodexlink-tools/codex-mobile-relay
 
@@ -21,7 +22,7 @@ SHELL_FILES := scripts/kodexlink-relay.sh scripts/tailscale-cli-launcher
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-deps require-kodexlink require-npm require-tailscale docker-start fetch-relay-source update-relay-source ensure-env configure-relay-source configure-url install install-all update enable disable install-relay install-tool-cli update-tool-cli install-tool install-tailscale-cli tailscale-serve tailscale-serve-off tailscale-funnel tailscale-funnel-off pair start stop restart status logs health measure print-url compose-config doctor doctor-relay doctor-tailscale doctor-mobile privacy-check lint check
+.PHONY: help check-deps require-kodexlink require-npm require-tailscale docker-start fetch-relay-source update-relay-source ensure-env configure-relay-source configure-url configure-https-port install install-all update enable disable install-relay install-tool-cli update-tool-cli install-tool install-tailscale-cli tailscale-serve tailscale-serve-off tailscale-funnel tailscale-funnel-off pair start stop restart status logs health curl measure print-url compose-config doctor doctor-relay doctor-tailscale doctor-mobile privacy-check lint check
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = ":.*##" } /^[a-zA-Z_-]+:.*##/ { printf "  %-24s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -98,15 +99,31 @@ configure-relay-source: ensure-env ## Point relay.env at the managed upstream so
 	@./scripts/kodexlink-relay.sh set-relay-repo "$(RELAY_SOURCE_DIR)"
 
 configure-url: ensure-env ## Prompt for or set the relay public HTTPS URL
-	@public_url="$(PUBLIC_URL)"; \
-	if [[ -z "$$public_url" ]]; then \
+	@configured_url="$$(KODEXLINK_RELAY_ENV_FILE="$(ENV_FILE)" ./scripts/kodexlink-relay.sh public-url 2>/dev/null || true)"; \
+	public_url="$(PUBLIC_URL)"; \
+	if [[ -n "$$public_url" ]]; then \
+		./scripts/kodexlink-relay.sh set-public-url "$$public_url"; \
+	elif [[ -n "$$configured_url" ]]; then \
+		echo "Reusing relay URL from $(ENV_FILE): $$configured_url"; \
+	else \
 		read -r -p "Relay HTTPS URL, for example https://machine-name.tailnet-name.ts.net: " public_url; \
+		if [[ -z "$$public_url" ]]; then \
+			echo "No relay URL provided."; \
+			exit 1; \
+		fi; \
+		./scripts/kodexlink-relay.sh set-public-url "$$public_url"; \
+	fi
+
+configure-https-port: ensure-env ## Persist the Tailscale HTTPS port for Serve/Funnel, for example HTTPS_PORT=8443
+	@https_port="$(HTTPS_PORT)"; \
+	if [[ -z "$$https_port" ]]; then \
+		read -r -p "Tailscale HTTPS port, for example 443 or 8443: " https_port; \
 	fi; \
-	if [[ -z "$$public_url" ]]; then \
-		echo "No relay URL provided."; \
+	if [[ -z "$$https_port" ]]; then \
+		echo "No HTTPS port provided."; \
 		exit 1; \
 	fi; \
-	./scripts/kodexlink-relay.sh set-public-url "$$public_url"
+	./scripts/kodexlink-relay.sh set-https-port "$$https_port"
 
 install: install-all ## Install and configure everything without enabling services
 
@@ -115,6 +132,7 @@ install-all: ## Install CLI launcher, upstream relay source, env, and desktop CL
 	@$(MAKE) fetch-relay-source
 	@$(MAKE) ensure-env
 	@$(MAKE) configure-relay-source
+	@if [[ -n "$(HTTPS_PORT)" ]]; then $(MAKE) configure-https-port HTTPS_PORT="$(HTTPS_PORT)"; fi
 	@$(MAKE) configure-url
 	@$(MAKE) install-tool-cli
 	@echo "Install complete. Services are configured but not enabled."
@@ -202,6 +220,14 @@ logs: ## Follow compose logs, optionally SERVICE=relay
 health: ## Check local relay health
 	@./scripts/kodexlink-relay.sh health
 
+curl: ## Fetch relay JSON, defaulting to /healthz; use PUBLIC=1 for the mobile-facing HTTPS URL and RELAY_PATH=/ for another path
+	@scope=local; \
+	if [[ "$(PUBLIC)" == "1" ]]; then \
+		scope=public; \
+	fi; \
+	relay_path="$(if $(RELAY_PATH),$(RELAY_PATH),/healthz)"; \
+	./scripts/kodexlink-relay.sh curl-relay "$$relay_path" "$$scope"
+
 measure: ## Show one-shot Docker CPU and memory usage
 	@./scripts/kodexlink-relay.sh measure
 
@@ -228,7 +254,11 @@ doctor-mobile: ensure-env ## Check mobile-facing relay URL basics
 		https://*) echo "Mobile relay URL is configured as HTTPS."; ;; \
 		*) echo "Mobile relay URL should be an HTTPS Tailscale Serve URL before pairing."; exit 1; ;; \
 	esac; \
-	curl -fsS "$${public_url%/}/healthz" >/dev/null || exit 1; \
+	if ! KODEXLINK_RELAY_ENV_FILE="$(ENV_FILE)" ./scripts/kodexlink-relay.sh curl-relay /healthz public >/dev/null; then \
+		echo "Mobile-facing relay health check failed."; \
+		echo "If the node hostname or HTTPS certificate changed, run 'make configure-url PUBLIC_URL=https://your-node.your-tailnet.ts.net' and then 'make enable'."; \
+		exit 1; \
+	fi; \
 	echo "Mobile-facing relay health endpoint is reachable."
 
 privacy-check: ## Scan repository files for common generated secrets
