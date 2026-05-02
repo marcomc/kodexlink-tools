@@ -296,6 +296,7 @@ set_https_port() {
   fi
 
   current_https_port="$(current_env_value KODEXLINK_TAILSCALE_HTTPS_PORT)"
+  current_https_port="${current_https_port:-443}"
   existing_previous_https_port="$(current_env_value KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT)"
   if [[ -n "${existing_previous_https_port}" ]]; then
     previous_https_port="${existing_previous_https_port}"
