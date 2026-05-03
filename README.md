@@ -37,10 +37,24 @@ The generated runtime environment lives outside this repository:
 ~/.config/kodexlink-tools/relay.env
 ```
 
-In that file, `KODEXLINK_RELAY_PUBLIC_BASE_URL` is the mobile-facing URL, while
-`KODEXLINK_RELAY_HOST_PORT` is only the local Docker port. With Tailscale Serve,
-the public URL should normally be `https://machine-name.tailnet-name.ts.net`
-without `:8787`; Tailscale proxies HTTPS port `443` to the local Docker port.
+In that file:
+
+- `KODEXLINK_RELAY_PUBLIC_BASE_URL` is the mobile-facing URL.
+- `KODEXLINK_TAILSCALE_HTTPS_PORT` is the shared published Tailscale
+  Serve/Funnel HTTPS port and must be `443`, `8443`, or `10000`.
+- `KODEXLINK_RELAY_HOST_PORT` is only the local Docker port.
+
+With Tailscale Serve, the public URL should normally be
+`https://machine-name.tailnet-name.ts.net` without `:8787`; Tailscale proxies
+HTTPS port `443` to the local Docker port. If port `443` is already occupied by
+another local reverse proxy, you can persist a different published HTTPS port
+such as `8443` or `10000` and use a public URL like
+`https://machine-name.tailnet-name.ts.net:8443`.
+
+The LaunchAgent is not the configuration source for relay URL or port. The
+LaunchAgent only keeps the desktop agent running in the background. Relay URL
+and HTTPS port should be changed through `relay.env` via the supported Makefile
+commands, not by editing the LaunchAgent plist.
 
 Do not commit real tailnet names, Tailscale IPs, tokens, local user paths,
 hostnames, generated pairing payloads, or generated env files.
@@ -82,6 +96,10 @@ make doctor
 make pair
 ```
 
+For normal operation, prefer the Makefile workflow above. You do not usually
+need to run `tailscale serve ...` manually, because `make enable` already
+configures Tailscale Serve with the saved URL and HTTPS port.
+
 On iPhone or iPad, before scanning the QR code:
 
 1. Connect Tailscale.
@@ -93,6 +111,8 @@ On iPhone or iPad, before scanning the QR code:
 7. Return to the pairing scanner and scan the Mac QR code.
 
 `make install` prepares the machine but does not start runtime services.
+If `~/.config/kodexlink-tools/relay.env` already exists, it reuses the saved
+relay URL instead of prompting again.
 `make enable` starts Docker, configures Tailscale Serve, and installs the
 desktop LaunchAgent.
 
@@ -102,6 +122,9 @@ desktop LaunchAgent.
 make help              # show available targets
 make status            # relay containers and desktop agent status
 make health            # local relay health
+make curl              # local relay JSON from /healthz
+make curl PUBLIC=1     # HTTPS relay JSON from /healthz
+make configure-https-port HTTPS_PORT=8443
 make doctor            # relay, Tailscale, mobile URL, privacy checks
 make measure           # one-shot Docker CPU and memory stats
 make logs SERVICE=relay
@@ -117,6 +140,26 @@ The lower-level script remains available for direct operations:
 ```
 
 Prefer Makefile targets for normal use.
+
+Treat direct `tailscale ...` commands in this repository as verification or
+troubleshooting commands unless the documentation explicitly says otherwise.
+
+If another local service already owns host port `443`, move only the Tailscale
+published port instead of the relay container port:
+
+```bash
+make configure-https-port HTTPS_PORT=8443
+make configure-url PUBLIC_URL=https://machine-name.tailnet-name.ts.net:8443
+make enable
+make doctor
+make pair
+```
+
+You can also inspect the persisted settings directly:
+
+```bash
+sed -n '1,120p' ~/.config/kodexlink-tools/relay.env
+```
 
 Keep the `kodexlink-tools` clone after installation. Runtime data lives outside
 the clone, so already-created containers, Docker volumes, Tailscale Serve, and

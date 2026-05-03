@@ -69,6 +69,12 @@ Tailscale Serve provides that private HTTPS proxy:
 https://machine-name.tailnet-name.ts.net -> http://127.0.0.1:8787
 ```
 
+or, when host port `443` is already needed by another local service:
+
+```text
+https://machine-name.tailnet-name.ts.net:8443 -> http://127.0.0.1:8787
+```
+
 No router ports are opened and no separate certificate renewal process is needed
 for this setup.
 
@@ -121,6 +127,10 @@ tailscale status
 tailscale serve status
 ```
 
+These direct `tailscale` commands are verification commands. For normal setup
+and daily use, prefer the Makefile workflow. `make enable` already runs the
+needed Tailscale Serve command with the saved settings from `relay.env`.
+
 `tailscale status --json` reports the machine DNS name in `Self.DNSName`. The
 value looks like this and can include a trailing dot:
 
@@ -144,11 +154,27 @@ make enable
 make doctor
 ```
 
+That Makefile flow is the supported setup path. The lower-level `tailscale
+serve` command shown later is only the equivalent underlying operation, useful
+for understanding the setup or for troubleshooting.
+
 `make install` creates the private env file outside the repository:
 
 ```text
 ~/.config/kodexlink-tools/relay.env
 ```
+
+That file is the supported configuration source for this setup. The most useful
+keys are:
+
+- `KODEXLINK_RELAY_PUBLIC_BASE_URL` for the mobile-facing HTTPS URL.
+- `KODEXLINK_TAILSCALE_HTTPS_PORT` for the shared published Tailscale
+  Serve/Funnel HTTPS port. Valid values are `443`, `8443`, or `10000`.
+- `KODEXLINK_RELAY_HOST_PORT` for the local Docker port only.
+
+Do not edit the KodexLink LaunchAgent plist to change relay URL or port. The
+LaunchAgent only restarts the desktop agent process; it does not own relay
+network settings.
 
 `make enable` starts the Docker relay stack, configures Tailscale Serve, and
 installs the KodexLink desktop LaunchAgent.
@@ -167,7 +193,17 @@ The equivalent lower-level commands are:
 ./scripts/kodexlink-relay.sh tailscale-serve
 ```
 
+To publish on `8443` instead of `443`:
+
+```bash
+make configure-https-port HTTPS_PORT=8443
+make configure-url PUBLIC_URL=https://machine-name.tailnet-name.ts.net:8443
+make enable
+```
+
 Prefer `make install`, `make enable`, and `make doctor` for normal operation.
+Only drop to the lower-level commands when debugging or when you intentionally
+need to inspect the exact Tailscale step.
 
 ## iPhone And iPad Setup
 
@@ -176,6 +212,8 @@ Prefer `make install`, `make enable`, and `make doctor` for normal operation.
 1. Make sure Tailscale is connected.
 1. Visit `https://machine-name.tailnet-name.ts.net/healthz` in Safari. It should
    return a JSON health response.
+1. If you intentionally published on `8443`, visit
+   `https://machine-name.tailnet-name.ts.net:8443/healthz` instead.
 1. Open KodexLink.
 1. Open Settings.
 1. Open Relay Server.
@@ -184,6 +222,12 @@ Prefer `make install`, `make enable`, and `make doctor` for normal operation.
 
    ```text
    https://machine-name.tailnet-name.ts.net
+   ```
+
+   If you intentionally published on `8443`, enter:
+
+   ```text
+   https://machine-name.tailnet-name.ts.net:8443
    ```
 
 1. Tap Save Custom Address.

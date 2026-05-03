@@ -20,12 +20,14 @@ Commands:
   init-env [public-url]       Create relay.env with generated database password.
   set-relay-repo <path>       Update the upstream relay source directory.
   set-public-url <url>        Update KODEXLINK_RELAY_PUBLIC_BASE_URL.
+  set-https-port <port>       Update KODEXLINK_TAILSCALE_HTTPS_PORT.
   up                          Build and start PostgreSQL, Redis, and relay.
   down                        Stop containers.
   restart                     Restart containers.
   status                      Show container status.
   logs [service]              Follow logs for all services or one service.
   health                      Check local relay health endpoint.
+  curl-relay [path] [scope]   Fetch relay JSON, defaulting to /healthz and local scope.
   measure                     Print one-shot Docker CPU and memory stats.
   public-url                  Print the configured public relay base URL.
   desktop-start               Start KodexLink desktop agent with this relay.
@@ -54,6 +56,20 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+validate_tailscale_https_port() {
+  local https_port="${1:-}"
+  [[ -n "${https_port}" ]] || fail "usage: ./scripts/kodexlink-relay.sh set-https-port 443"
+  [[ "${https_port}" =~ ^[0-9]+$ ]] || fail "HTTPS port must be numeric"
+
+  case "${https_port}" in
+    443|8443|10000)
+      ;;
+    *)
+      fail "HTTPS port must be one of 443, 8443, or 10000 because the same setting is used for Tailscale Serve and Funnel"
+      ;;
+  esac
+}
+
 random_hex() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 24
@@ -76,6 +92,8 @@ load_env() {
   load_env_key KODEXLINK_TOOLS_DIR
   load_env_key KODEXLINK_RELAY_REPO
   load_env_key KODEXLINK_RELAY_PUBLIC_BASE_URL
+  load_env_key KODEXLINK_TAILSCALE_HTTPS_PORT
+  load_env_key KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT
   load_env_key KODEXLINK_RELAY_HOST_PORT
   load_env_key KODEXLINK_POSTGRES_DB
   load_env_key KODEXLINK_POSTGRES_USER
@@ -139,6 +157,23 @@ write_env_assignment() {
   printf '%s=%s\n' "${key}" "${value}"
 }
 
+current_env_value() {
+  local key="$1"
+  local value
+  local rc
+
+  [[ -f "${ENV_FILE}" && -r "${ENV_FILE}" ]] || return 1
+
+  set +e
+  value="$(env_value "${key}")"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 ]]; then
+    printf '%s\n' "${value}"
+  fi
+}
+
 compose() {
   load_env
   KODEXLINK_TOOLS_DIR="${ROOT_DIR}" docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
@@ -166,6 +201,7 @@ init_env() {
     write_env_assignment KODEXLINK_TOOLS_DIR "${ROOT_DIR}"
     write_env_assignment KODEXLINK_RELAY_REPO "${DEFAULT_RELAY_REPO}"
     write_env_assignment KODEXLINK_RELAY_PUBLIC_BASE_URL "${public_url}"
+    write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT 443
     write_env_assignment KODEXLINK_RELAY_HOST_PORT 8787
     write_env_assignment KODEXLINK_POSTGRES_DB codex_mobile
     write_env_assignment KODEXLINK_POSTGRES_USER kodexlink
@@ -250,11 +286,99 @@ set_relay_repo() {
   info "updated relay source directory"
 }
 
+set_https_port() {
+  local https_port="${1:-}"
+  local current_https_port=""
+  local existing_previous_https_port=""
+  local previous_https_port=""
+  validate_tailscale_https_port "${https_port}"
+
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    init_env
+  fi
+
+  current_https_port="$(current_env_value KODEXLINK_TAILSCALE_HTTPS_PORT)"
+  current_https_port="${current_https_port:-443}"
+  existing_previous_https_port="$(current_env_value KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT)"
+  if [[ -n "${existing_previous_https_port}" ]]; then
+    if [[ "${https_port}" == "${existing_previous_https_port}" && "${current_https_port}" != "${https_port}" ]]; then
+      previous_https_port="${current_https_port}"
+    else
+      previous_https_port="${existing_previous_https_port}"
+    fi
+  elif [[ -n "${current_https_port}" && "${current_https_port}" != "${https_port}" ]]; then
+    previous_https_port="${current_https_port}"
+  fi
+
+  local tmp_file
+  if ! tmp_file="$(mktemp "${ENV_FILE}.XXXXXX")"; then
+    fail "failed to create temporary file"
+  fi
+
+  local found=0
+  local previous_found=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      KODEXLINK_TAILSCALE_HTTPS_PORT=*)
+        write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT "${https_port}"
+        found=1
+        ;;
+      KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT=*)
+        if [[ -n "${previous_https_port}" ]]; then
+          write_env_assignment KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT "${previous_https_port}"
+          previous_found=1
+        fi
+        ;;
+      *)
+        printf '%s\n' "${line}"
+        ;;
+    esac
+  done < "${ENV_FILE}" > "${tmp_file}"
+
+  if [[ "${found}" -eq 0 ]]; then
+    write_env_assignment KODEXLINK_TAILSCALE_HTTPS_PORT "${https_port}" >> "${tmp_file}"
+  fi
+
+  if [[ -n "${previous_https_port}" && "${previous_found}" -eq 0 ]]; then
+    write_env_assignment KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT "${previous_https_port}" >> "${tmp_file}"
+  fi
+
+  mv "${tmp_file}" "${ENV_FILE}"
+  chmod 0600 "${ENV_FILE}"
+  info "updated Tailscale HTTPS port: ${https_port}"
+}
+
 health() {
   load_env
   local port="${KODEXLINK_RELAY_HOST_PORT:-8787}"
   require_command curl
   curl -fsS "http://127.0.0.1:${port}/healthz"
+  printf '\n'
+}
+
+curl_relay() {
+  load_env
+  require_command curl
+
+  local path="${1:-/healthz}"
+  local scope="${2:-local}"
+  local base_url
+
+  [[ "${path}" == /* ]] || path="/${path}"
+
+  case "${scope}" in
+    local)
+      base_url="http://127.0.0.1:${KODEXLINK_RELAY_HOST_PORT:-8787}"
+      ;;
+    public)
+      base_url="${KODEXLINK_RELAY_PUBLIC_BASE_URL:?}"
+      ;;
+    *)
+      fail "usage: ./scripts/kodexlink-relay.sh curl-relay [/path] [local|public]"
+      ;;
+  esac
+
+  curl -fsS "${base_url%/}${path}"
   printf '\n'
 }
 
@@ -294,18 +418,143 @@ tailscale_target() {
   printf 'http://127.0.0.1:%s\n' "${KODEXLINK_RELAY_HOST_PORT:-8787}"
 }
 
+tailscale_https_port() {
+  local https_port="${KODEXLINK_TAILSCALE_HTTPS_PORT:-}"
+
+  if [[ -z "${https_port}" ]]; then
+    https_port="$(current_env_value KODEXLINK_TAILSCALE_HTTPS_PORT)"
+  fi
+
+  https_port="${https_port:-443}"
+  validate_tailscale_https_port "${https_port}"
+  printf '%s\n' "${https_port}"
+}
+
+tailscale_previous_https_port() {
+  local current_https_port
+  local previous_https_port="${KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT:-}"
+
+  if [[ -z "${previous_https_port}" ]]; then
+    previous_https_port="$(current_env_value KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT)"
+  fi
+
+  current_https_port="$(tailscale_https_port)"
+  if [[ -z "${previous_https_port}" || "${previous_https_port}" == "${current_https_port}" ]]; then
+    return 1
+  fi
+
+  [[ "${previous_https_port}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "${previous_https_port}"
+}
+
+current_previous_https_port() {
+  local value
+  local rc
+
+  set +e
+  value="$(tailscale_previous_https_port)"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 ]]; then
+    printf '%s\n' "${value}"
+  fi
+}
+
+clear_previous_https_port_marker() {
+  [[ -f "${ENV_FILE}" ]] || return 0
+
+  local tmp_file
+  if ! tmp_file="$(mktemp "${ENV_FILE}.XXXXXX")"; then
+    fail "failed to create temporary file"
+  fi
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      KODEXLINK_TAILSCALE_PREVIOUS_HTTPS_PORT=*)
+        ;;
+      *)
+        printf '%s\n' "${line}"
+        ;;
+    esac
+  done < "${ENV_FILE}" > "${tmp_file}"
+
+  mv "${tmp_file}" "${ENV_FILE}"
+  chmod 0600 "${ENV_FILE}"
+}
+
+run_tailscale_https_off() {
+  local mode="$1"
+  local https_port="$2"
+  local output
+  local rc
+
+  set +e
+  output="$(tailscale "${mode}" --https="${https_port}" off 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 || "${output}" == *"handler does not exist"* ]]; then
+    return 0
+  fi
+
+  [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
+  return "${rc}"
+}
+
+disable_previous_tailscale_serve_port() {
+  local previous_https_port
+
+  previous_https_port="$(current_previous_https_port)"
+  if [[ -z "${previous_https_port}" ]]; then
+    return 0
+  fi
+
+  run_tailscale_https_off serve "${previous_https_port}"
+}
+
+disable_previous_tailscale_funnel_port() {
+  local previous_https_port
+
+  previous_https_port="$(current_previous_https_port)"
+  if [[ -z "${previous_https_port}" ]]; then
+    return 0
+  fi
+
+  case "${previous_https_port}" in
+    443|8443|10000)
+      run_tailscale_https_off funnel "${previous_https_port}"
+      ;;
+    *)
+      ;;
+  esac
+}
+
+disable_previous_tailscale_https_ports() {
+  disable_previous_tailscale_serve_port
+  disable_previous_tailscale_funnel_port
+}
+
 tailscale_serve() {
   require_tailscale
   load_env
   local target
+  local https_port
   target="$(tailscale_target)"
-  tailscale serve --bg --https=443 "${target}"
+  https_port="$(tailscale_https_port)"
+  disable_previous_tailscale_https_ports
+  tailscale serve --bg --https="${https_port}" "${target}"
+  clear_previous_https_port_marker
   tailscale serve status
 }
 
 tailscale_serve_off() {
   require_tailscale
-  tailscale serve --https=443 off
+  local https_port
+  https_port="$(tailscale_https_port)"
+  disable_previous_tailscale_https_ports
+  run_tailscale_https_off serve "${https_port}"
+  clear_previous_https_port_marker
   tailscale serve status
 }
 
@@ -313,8 +562,12 @@ tailscale_funnel() {
   require_tailscale
   load_env
   local target
+  local https_port
   target="$(tailscale_target)"
-  tailscale funnel --bg --https=443 "${target}"
+  https_port="$(tailscale_https_port)"
+  disable_previous_tailscale_https_ports
+  tailscale funnel --bg --https="${https_port}" "${target}"
+  clear_previous_https_port_marker
   tailscale funnel status
 }
 
@@ -326,7 +579,11 @@ tailscale_funnel_off() {
     return 0
   fi
 
-  tailscale funnel --https=443 off
+  local https_port
+  https_port="$(tailscale_https_port)"
+  disable_previous_tailscale_https_ports
+  run_tailscale_https_off funnel "${https_port}"
+  clear_previous_https_port_marker
   tailscale funnel status
 }
 
@@ -342,6 +599,10 @@ case "${1:-}" in
   set-public-url)
     shift
     set_public_url "${1:-}"
+    ;;
+  set-https-port)
+    shift
+    set_https_port "${1:-}"
     ;;
   up)
     compose up -d --build postgres redis relay
@@ -363,6 +624,10 @@ case "${1:-}" in
     ;;
   health)
     health
+    ;;
+  curl-relay)
+    shift
+    curl_relay "${1:-}" "${2:-local}"
     ;;
   measure)
     measure
