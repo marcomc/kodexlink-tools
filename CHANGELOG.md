@@ -2,7 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.1.2] - 2026-05-20
+
+### Added
+
+- Added `make uninstall` and `uninstall-services` and `uninstall-tool-cli` targets for removing the KodexLink relay, Tailscale Serve, and desktop CLI from the machine.
 
 ## [0.1.1] - 2026-06-10
 

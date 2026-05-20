@@ -10,6 +10,7 @@ updates, reboot behavior, and recovery notes for KodexLink Relay Tools.
 - [Repository Clone Lifecycle](#repository-clone-lifecycle)
 - [Install And Enable](#install-and-enable)
 - [Update Without Re-Pairing](#update-without-re-pairing)
+- [Uninstall](#uninstall)
 - [Pairing And Recovery](#pairing-and-recovery)
 - [Remote Pairing](#remote-pairing)
 - [Boot Behavior](#boot-behavior)
@@ -50,6 +51,7 @@ make status
 make measure
 make update
 make disable
+make uninstall
 ```
 
 Those `make` commands are the supported operational interface. In particular,
@@ -199,6 +201,33 @@ Existing paired devices should remain paired because their durable bindings live
 in PostgreSQL and the relay URL remains the same. A relay restart can invalidate
 active in-progress QR pairing sessions stored in Redis. Generate a fresh QR with
 `make pair` after an update if a pairing flow was open.
+
+## Uninstall
+
+Use this when you want to remove the project-installed services but keep the
+saved relay configuration and paired device data for a future reinstall:
+
+```bash
+make uninstall
+```
+
+It removes the desktop LaunchAgent, disables Tailscale Serve or Funnel mappings,
+stops the Docker Compose stack, and removes `/usr/local/bin/tailscale` only when
+that file still matches this repository's launcher script.
+
+It preserves:
+
+- `~/.config/kodexlink-tools/relay.env`;
+- the managed upstream relay checkout under `~/.local/share/kodexlink-tools/`;
+- Docker volumes, including PostgreSQL pairing data.
+
+The global KodexLink npm CLI is not removed by default because it may have
+existed before this relay setup. If it was installed only for this setup, remove
+it explicitly:
+
+```bash
+make uninstall-tool-cli
+```
 
 ## Pairing And Recovery
 

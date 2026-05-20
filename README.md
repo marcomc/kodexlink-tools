@@ -11,6 +11,7 @@ Compose, Tailscale Serve, and the upstream KodexLink desktop agent.
 - [Daily Commands](#daily-commands)
 - [Pairing](#pairing)
 - [Updates](#updates)
+- [Uninstall](#uninstall)
 - [Boot Behavior](#boot-behavior)
 - [Security Model](#security-model)
 - [Resource Use](#resource-use)
@@ -130,6 +131,7 @@ make measure           # one-shot Docker CPU and memory stats
 make logs SERVICE=relay
 make restart           # rebuild/reapply relay compose config
 make disable           # stop services without deleting data
+make uninstall         # remove project-installed services and launcher
 make enable            # start services again
 ```
 
@@ -201,6 +203,34 @@ from npm, rebuilds and restarts the relay container, and refreshes the
 LaunchAgent. It does not delete Docker volumes, recreate `relay.env`, or change
 the relay public URL, so already paired devices should remain paired. Any QR
 pairing session open during the restart can expire; run `make pair` again.
+
+## Uninstall
+
+To remove project-installed services while preserving relay data and saved
+settings:
+
+```bash
+make uninstall
+```
+
+This removes the KodexLink desktop LaunchAgent, disables Tailscale Serve or
+Funnel mappings, stops the Docker Compose stack, and removes the
+`/usr/local/bin/tailscale` launcher only when it matches this repository's
+launcher script.
+
+It preserves:
+
+- `~/.config/kodexlink-tools/relay.env`;
+- the managed upstream relay checkout under `~/.local/share/kodexlink-tools/`;
+- Docker volumes, including paired device data.
+
+The global KodexLink npm CLI is left installed because it may have existed
+before this setup. Remove it explicitly only when it was installed solely for
+this relay:
+
+```bash
+make uninstall-tool-cli
+```
 
 ## Boot Behavior
 
