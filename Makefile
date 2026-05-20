@@ -23,7 +23,7 @@ SHELL_FILES := scripts/kodexlink-relay.sh scripts/tailscale-cli-launcher
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-deps require-kodexlink require-npm require-tailscale docker-start fetch-relay-source update-relay-source ensure-env configure-relay-source configure-url configure-https-port install install-all update enable disable install-relay install-tool-cli update-tool-cli install-tool install-tailscale-cli tailscale-serve tailscale-serve-off tailscale-funnel tailscale-funnel-off pair start stop restart status logs health curl measure print-url compose-config doctor doctor-relay doctor-tailscale doctor-mobile privacy-check lint check
+.PHONY: help check-deps require-kodexlink require-npm require-tailscale docker-start fetch-relay-source update-relay-source ensure-env configure-relay-source configure-url configure-https-port install install-all update enable disable uninstall uninstall-services uninstall-tool-cli uninstall-tailscale-cli install-relay install-tool-cli update-tool-cli install-tool install-tailscale-cli tailscale-serve tailscale-serve-off tailscale-funnel tailscale-funnel-off pair start stop restart status logs health curl measure print-url compose-config doctor doctor-relay doctor-tailscale doctor-mobile privacy-check lint check
 
 help: ## Show available targets
 	@awk 'BEGIN { FS = ":.*##" } /^[a-zA-Z_-]+:.*##/ { printf "  %-24s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -160,6 +160,21 @@ disable: ## Disable all runtime services without deleting data
 	@$(RELAY_SCRIPT) tailscale-serve-off || true
 	@$(RELAY_SCRIPT) down || true
 
+uninstall: ## Remove project-installed services while preserving config and relay data
+	@$(MAKE) uninstall-services
+	@$(MAKE) uninstall-tailscale-cli
+	@echo "Uninstall complete. Preserved $(ENV_FILE), $(RELAY_SOURCE_DIR), Docker volumes, and paired device data."
+	@echo "Run 'make uninstall-tool-cli' only if the KodexLink npm CLI was installed solely for this setup."
+
+uninstall-services: ## Remove runtime services while preserving config, Docker volumes, and pairing data
+	@$(RELAY_SCRIPT) desktop-service-remove || true
+	@$(RELAY_SCRIPT) tailscale-funnel-off || true
+	@$(RELAY_SCRIPT) tailscale-serve-off || true
+	@$(RELAY_SCRIPT) down || true
+
+uninstall-tool-cli: require-npm ## Remove the global KodexLink desktop CLI installed by npm
+	@"$(NPM)" uninstall -g kodexlink
+
 install-relay: ## Install and start the Docker relay stack
 	@$(MAKE) docker-start
 	@$(MAKE) fetch-relay-source
@@ -183,6 +198,18 @@ install-tool: ensure-env install-tool-cli require-kodexlink ## Install the Kodex
 install-tailscale-cli: ## Install or refresh /usr/local/bin/tailscale
 	@sudo install -m 0755 scripts/tailscale-cli-launcher /usr/local/bin/tailscale
 	@/usr/local/bin/tailscale version
+
+uninstall-tailscale-cli: ## Remove this project's /usr/local/bin/tailscale launcher when it is installed
+	@if [[ -e /usr/local/bin/tailscale ]]; then \
+		if cmp -s scripts/tailscale-cli-launcher /usr/local/bin/tailscale; then \
+			sudo rm /usr/local/bin/tailscale; \
+			echo "Removed /usr/local/bin/tailscale launcher."; \
+		else \
+			echo "Leaving /usr/local/bin/tailscale in place because it was not installed by this project."; \
+		fi; \
+	else \
+		echo "/usr/local/bin/tailscale is not installed."; \
+	fi
 
 tailscale-serve: ensure-env require-tailscale ## Publish the relay privately with Tailscale Serve
 	@$(RELAY_SCRIPT) tailscale-serve
